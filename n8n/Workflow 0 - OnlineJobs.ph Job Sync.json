@@ -1,0 +1,645 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "minutes",
+              "minutesInterval": 2
+            }
+          ]
+        }
+      },
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.3,
+      "position": [
+        -688,
+        -48
+      ],
+      "id": "7e47c1a4-5fa6-439a-8e01-f68f4dae642f",
+      "name": "Schedule Trigger"
+    },
+    {
+      "parameters": {
+        "url": "=https://www.onlinejobs.ph/jobseekers/job/{{ $json.jobId }}",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        352,
+        -48
+      ],
+      "id": "51d44e8e-a018-45aa-b15d-b90c4846abc9",
+      "name": "GET HTML",
+      "alwaysOutputData": false,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "operation": "extractHtmlContent",
+        "extractionValues": {
+          "values": [
+            {
+              "key": "jobTitle",
+              "cssSelector": "h1"
+            },
+            {
+              "key": "jobDescription",
+              "cssSelector": ".job-description"
+            },
+            {
+              "key": "jobSkills",
+              "cssSelector": ".card-worker-topskill"
+            },
+            {
+              "key": "typeOfWork",
+              "cssSelector": "h3:contains(\"TYPE OF WORK\") + p"
+            },
+            {
+              "key": "compensation",
+              "cssSelector": "h3:contains(\"WAGE / SALARY\") + p"
+            },
+            {
+              "key": "hoursPerWeek",
+              "cssSelector": "h3:contains(\"HOURS PER WEEK\") + p"
+            },
+            {
+              "key": "jobDate",
+              "cssSelector": "h3:contains(\"DATE UPDATED\") + p"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.html",
+      "typeVersion": 1.2,
+      "position": [
+        592,
+        -48
+      ],
+      "id": "572135ad-cc50-4292-b957-521db4e7a727",
+      "name": "Extract Fields"
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "job_postings",
+          "mode": "list",
+          "cachedResultName": "job_postings"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {
+            "id": 0,
+            "job_id": 0
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "job_id",
+              "displayName": "job_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_title",
+              "displayName": "job_title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_description",
+              "displayName": "job_description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_skills",
+              "displayName": "job_skills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "type_of_work",
+              "displayName": "type_of_work",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "compensation",
+              "displayName": "compensation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "hours_per_week",
+              "displayName": "hours_per_week",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_date",
+              "displayName": "job_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1248,
+        -48
+      ],
+      "id": "96ee214f-c9b9-4b0f-8f37-69a6640a79c0",
+      "name": "Insert rows in a table",
+      "credentials": {
+        "postgres": {
+          "id": "ZzBIvq2za0U7odoL",
+          "name": "job_alert_client"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "e82d037b-2ccc-4e7a-880f-bca1d13c2f54",
+              "name": "job_id",
+              "value": "={{ $('Config').item.json.jobId }}",
+              "type": "string"
+            },
+            {
+              "id": "b44c5e88-91a8-49fb-8ffa-a26c85e7534b",
+              "name": "job_title",
+              "value": "={{ $json.jobTitle }}",
+              "type": "string"
+            },
+            {
+              "id": "9b7f565f-be75-4120-8db8-bd6526026fa9",
+              "name": "job_description",
+              "value": "={{ $json.jobDescription }}",
+              "type": "string"
+            },
+            {
+              "id": "6946b378-2383-434f-aedb-bc5dbb4533f2",
+              "name": "job_skills",
+              "value": "={{ $json.jobSkills }}",
+              "type": "string"
+            },
+            {
+              "id": "a45a1efc-8efb-4a4e-acd9-731fca92adbf",
+              "name": "type_of_work",
+              "value": "={{ $json.typeOfWork }}",
+              "type": "string"
+            },
+            {
+              "id": "f786f020-7ae5-4c85-9c80-4ca8325064af",
+              "name": "compensation",
+              "value": "={{ $json.compensation }}",
+              "type": "string"
+            },
+            {
+              "id": "f5d1c799-6768-458c-bb79-6fee7247e41b",
+              "name": "hours_per_week",
+              "value": "={{ $json.hoursPerWeek }}",
+              "type": "string"
+            },
+            {
+              "id": "a72cab6c-95e7-4cd2-b08f-bb4c56f47f16",
+              "name": "job_date",
+              "value": "={{ $json.jobDate }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1056,
+        -48
+      ],
+      "id": "cd35fcf2-a191-4d72-8f55-ae9ca143ec46",
+      "name": "Edit Fields"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "d4f056bf-240b-41d1-8259-e25ab06b66dd",
+              "name": "jobId",
+              "value": "={{ $json.value }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        144,
+        -48
+      ],
+      "id": "3186d992-2cdc-4378-95ca-a5e93a5baeb1",
+      "name": "Config"
+    },
+    {
+      "parameters": {
+        "operation": "select",
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "job_postings",
+          "mode": "list",
+          "cachedResultName": "job_postings"
+        },
+        "limit": 1,
+        "sort": {
+          "values": [
+            {
+              "column": "job_id",
+              "direction": "DESC"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        -480,
+        -48
+      ],
+      "id": "17df1188-c2af-4e26-b803-202213934fd3",
+      "name": "GET last processed job_id",
+      "credentials": {
+        "postgres": {
+          "id": "ZzBIvq2za0U7odoL",
+          "name": "job_alert_client"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        -80,
+        -48
+      ],
+      "id": "c9e89056-0a9e-4719-8142-c69897242819",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {},
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        1456,
+        -48
+      ],
+      "id": "8f00403b-2ec9-47a6-97af-877e046997a5",
+      "name": "Wait",
+      "webhookId": "697d685e-05a7-4ffd-b4a0-8500d0785fae"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "d6ae730e-bea0-49be-b243-3e96f87bac5e",
+              "leftValue": "={{ $json.jobDescription }}",
+              "rightValue": 0,
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "ef7036b7-ede7-4617-8510-73ca52f8da18",
+              "leftValue": "={{ $json.typeOfWork }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "ebd5a54e-625a-4807-aee0-c2fe7f5be95c",
+              "leftValue": "={{ $json.compensation }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            },
+            {
+              "id": "e4ff73ab-ab47-4ae6-a2d9-b42e970a77e9",
+              "leftValue": "={{ $json.jobDate }}",
+              "rightValue": "",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {
+          "ignoreCase": true
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        800,
+        -48
+      ],
+      "id": "bc791480-84a3-4fd0-be2c-f97ecc81ec5f",
+      "name": "Has valid job_id"
+    },
+    {
+      "parameters": {
+        "jsCode": "// Get the input value of n from the incoming data\nconst n = parseInt($input.first().json.job_id, 10);\n\n// Generate items for n+1 through n+5\nconst results = [];\nfor (let i = 1; i <= 5; i++) {\n  results.push({ json: { value: n + i } });\n}\n\nreturn results;"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -272,
+        -48
+      ],
+      "id": "0f8985e9-0beb-4464-8f9f-e0a1a57ffd87",
+      "name": "Generate next 5 job_ids"
+    },
+    {
+      "parameters": {
+        "content": "## Increment job_id parameter",
+        "height": 352,
+        "width": 592,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -720,
+        -160
+      ],
+      "id": "6a62e13f-14bf-4f5b-b497-c9b056c956a4",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "content": "## Scrape and extract job details",
+        "height": 352,
+        "width": 592,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        128,
+        -160
+      ],
+      "id": "2a234643-c601-41d5-8b8e-1854e2396e29",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## Insert to Postgresdb",
+        "height": 352,
+        "width": 592,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1008,
+        -160
+      ],
+      "id": "4b6bb303-e713-455b-86f9-70e4750de07b",
+      "name": "Sticky Note2"
+    }
+  ],
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "GET last processed job_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET HTML": {
+      "main": [
+        [
+          {
+            "node": "Extract Fields",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Fields": {
+      "main": [
+        [
+          {
+            "node": "Has valid job_id",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert rows in a table": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Edit Fields": {
+      "main": [
+        [
+          {
+            "node": "Insert rows in a table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "GET HTML",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET last processed job_id": {
+      "main": [
+        [
+          {
+            "node": "Generate next 5 job_ids",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has valid job_id": {
+      "main": [
+        [
+          {
+            "node": "Edit Fields",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Generate next 5 job_ids": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f593b1bde7a656a109af29ca03677e894cc660fc016075f84ae5399c2f124339"
+  }
+}
