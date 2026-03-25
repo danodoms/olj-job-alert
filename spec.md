@@ -59,12 +59,12 @@ Users interact entirely through a Telegram bot. They subscribe to keywords (e.g.
            ┌─────────────────┼─────────────────┐
            │                 │                 │
            ▼                 ▼                 ▼
-    ┌──────────┐      ┌──────────┐      ┌──────────┐
-    │Workflow 0│      │Workflow 1│      │Workflow 2│
-    │Job Sync  │      │Sub Mgr   │      │Alert Not.│
-    │          │      │   (TODO) │      │   (TODO) │
-    │Scheduled │      │Telegram  │      │Triggered │
-    │Trigger   │      │Trigger   │      │by INSERT │
+     ┌──────────┐      ┌──────────┐      ┌──────────┐
+     │Workflow 0│      │Workflow 1│      │Workflow 2│
+     │Job Sync  │      │Sub Mgr   │      │Alert Not.│
+     │          │      │Keywordsub │      │Polling   │
+     │Scheduled │      │Telegram  │      │Trigger   │
+     │Trigger   │      │Trigger   │      │by Processed│
     └────┬─────┘      └────┬─────┘      └────┬─────┘
          │                 │                 │
          ▼                 ▼                 ▼
@@ -78,9 +78,9 @@ Users interact entirely through a Telegram bot. They subscribe to keywords (e.g.
 
 - **Workflow 0 — OnlineJobs.ph Job Sync**: Scheduled trigger (every 5-10 min). Scrapes new job postings from OnlineJobs.ph using HTTP GET requests, parses HTML with CSS selectors, and batch inserts into `job_postings` table. Implements intelligent stop conditions (batch limit or consecutive 404s) and retry logic. **No dependency on other workflows.**
 
-- **Workflow 1 — Subscription Manager (TODO)**: Handles `/subscribe`, `/unsubscribe`, and `/subscriptions` commands from Telegram users. Reads and writes to `user_subscriptions`. **No dependency on other workflows.**
+- **Workflow 1 — Subscription Manager**: Handles `/keywordsub` command from Telegram users. Deletes existing keywords for user, then inserts new keywords (comma-separated, max 3). Reads and writes to `user_subscriptions`. **No dependency on other workflows.**
 
-- **Workflow 2 — Job Alert Notifier (TODO)**: Triggered when a new row is inserted into `job_postings` (via Postgres trigger or polling). Queries matching subscribers and sends Telegram notifications. **Only depends on PostgreSQL triggers, not on Workflow 0.**
+- **Workflow 2 — Job Alert Notifier**: Triggered every 20 seconds via schedule. Selects one unprocessed job posting, matches keywords against title and description, finds subscribers, sends HTML-formatted Telegram notifications, and marks job as processed. **No dependency on Workflow 0.**
 
 **Key Decoupling Points:**
 

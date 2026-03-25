@@ -4,13 +4,15 @@ Automated job alerts for OnlineJobs.ph — get notified on Telegram when jobs ma
 
 **Perfect for:** Job hunters who want instant notifications without constantly checking job boards.
 
+**Get Started:** https://t.me/OLJAlertBot
+
 ---
 
 ## What It Does
 
-1. **Scrapes** OnlineJobs.ph every 5-10 minutes for new job postings
+1. **Scrapes** OnlineJobs.ph every 2 minutes for new job postings
 2. **Stores** jobs in a database
-3. **Lets you** subscribe to keywords (like "n8n", "react", "remote")
+3. **Lets you** subscribe to keywords via Telegram bot (https://t.me/OLJAlertBot)
 4. **Sends** you a Telegram message when a matching job is posted
 
 ---
@@ -21,7 +23,7 @@ Automated job alerts for OnlineJobs.ph — get notified on Telegram when jobs ma
 - **n8n** (automation tool)
 - **PostgreSQL** (database)
 - **Telegram Bot Token** (from @BotFather)
-- **Basic tech skills** (you said you're experienced, so you got this!)
+- **Basic tech skills** (you got this!)
 
 ---
 
@@ -104,7 +106,9 @@ All three workflows are complete and ready to use:
 2. **Workflow 1** lets you subscribe to keywords via Telegram using `/keywordsub keyword1, keyword2, keyword3`
 3. **Workflow 2** automatically notifies you when a job matching your keywords is posted
 
-Simply start all three workflows in n8n and you're ready to receive job alerts!
+**Start using the bot:** https://t.me/OLJAlertBot
+
+Simply start all three workflows in n8n, open the Telegram bot, and subscribe to your keywords to start receiving job alerts!
 
 See `spec.md` for detailed technical specifications and implementation details.
 
