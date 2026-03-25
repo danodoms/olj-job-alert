@@ -260,7 +260,7 @@
     },
     {
       "parameters": {
-        "amount": 0.05
+        "amount": 0.25
       },
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
@@ -703,6 +703,54 @@
       ],
       "id": "9c4fb4fe-08eb-4903-ae9f-a5e6ad0304e2",
       "name": "Set payload1"
+    },
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "job-alert-notifier-retrigger",
+        "authentication": "basicAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2.1,
+      "position": [
+        -368,
+        -208
+      ],
+      "id": "47947c3a-a108-4787-8739-f8fc31f7e323",
+      "name": "Webhook",
+      "webhookId": "e0e1d605-843b-47c1-be08-9930eae95f1d",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "v72ZvZY8U2Mmyt8v",
+          "name": "Basic Auth"
+        }
+      },
+      "disabled": true
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "https://olj-alerts.johnlloyd.dev/webhook/job-alert-notifier-retrigger",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBasicAuth",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1776,
+        304
+      ],
+      "id": "3fdab13d-cbc1-4c01-9665-d55b45e9cf27",
+      "name": "Re-trigger",
+      "credentials": {
+        "httpBasicAuth": {
+          "id": "v72ZvZY8U2Mmyt8v",
+          "name": "Basic Auth"
+        }
+      },
+      "disabled": true
     }
   ],
   "connections": {
@@ -863,6 +911,11 @@
         ]
       ]
     },
+    "Update rows in a table1": {
+      "main": [
+        []
+      ]
+    },
     "Set payload1": {
       "main": [
         [
@@ -872,6 +925,11 @@
             "index": 0
           }
         ]
+      ]
+    },
+    "Webhook": {
+      "main": [
+        []
       ]
     }
   },
