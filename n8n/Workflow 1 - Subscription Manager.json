@@ -396,6 +396,148 @@
       "id": "572111de-3ffd-48d3-be12-d124c11e0a2c",
       "name": "Set Payload",
       "executeOnce": true
+    },
+    {
+      "parameters": {
+        "content": "## Delete keywords and unsub",
+        "height": 256,
+        "width": 624,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        464,
+        208
+      ],
+      "id": "61b245be-c482-480f-8775-81efe79e1c10",
+      "name": "Sticky Note3"
+    },
+    {
+      "parameters": {
+        "operation": "deleteTable",
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "user_subscriptions",
+          "mode": "list",
+          "cachedResultName": "user_subscriptions"
+        },
+        "deleteCommand": "delete",
+        "where": {
+          "values": [
+            {
+              "column": "chat_id",
+              "value": "={{ $('Telegram Trigger').item.json.message.chat.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        528,
+        288
+      ],
+      "id": "6584551e-11d9-49b2-a061-8e4d318026a8",
+      "name": "Delete table or rows1",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZzBIvq2za0U7odoL",
+          "name": "job_alert_client"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        928,
+        288
+      ],
+      "id": "3ccece0f-81c9-49c1-beb3-13d52aa261af",
+      "name": "Send a text message1",
+      "webhookId": "56c71022-e284-4348-ad05-2c51554bebd4",
+      "executeOnce": true,
+      "credentials": {
+        "telegramApi": {
+          "id": "2Izdb1Nh53OzgsTq",
+          "name": "OLJ Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "403798b5-edde-4a88-b1ef-2fce5bcc81a3",
+              "name": "message",
+              "value": "=✅ **Unsubcribed**",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        720,
+        288
+      ],
+      "id": "7cb52709-a2cc-4657-b467-7baea1adb79c",
+      "name": "Set Payload1",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "9f9386f9-2317-4247-86b1-b6790d04315c",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "=/unsub",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {
+          "ignoreCase": true
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        208,
+        288
+      ],
+      "id": "e9108827-7fb2-493e-a6c9-aac3f46088fe",
+      "name": "If unsub"
     }
   ],
   "connections": {
@@ -404,6 +546,11 @@
         [
           {
             "node": "If keywordsub",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "If unsub",
             "type": "main",
             "index": 0
           }
@@ -504,6 +651,39 @@
         [
           {
             "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Delete table or rows1": {
+      "main": [
+        [
+          {
+            "node": "Set Payload1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Payload1": {
+      "main": [
+        [
+          {
+            "node": "Send a text message1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If unsub": {
+      "main": [
+        [
+          {
+            "node": "Delete table or rows1",
             "type": "main",
             "index": 0
           }
