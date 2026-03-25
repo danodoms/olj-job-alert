@@ -28,6 +28,7 @@ CREATE TABLE job_postings (
   compensation     TEXT,
   hours_per_week   TEXT,
   job_date         DATE,
+  is_processed     BOOLEAN DEFAULT FALSE,
   created_at       TIMESTAMPTZ DEFAULT NOW()
 );
 
@@ -42,6 +43,7 @@ CREATE TABLE user_subscriptions (
 -- Create indexes
 CREATE INDEX idx_job_postings_job_id ON job_postings(job_id);
 CREATE INDEX idx_job_postings_created_at ON job_postings(created_at DESC);
+CREATE INDEX idx_job_postings_is_processed ON job_postings(is_processed);
 CREATE INDEX idx_user_subscriptions_chat_id_keyword ON user_subscriptions(chat_id, keyword);
 
 

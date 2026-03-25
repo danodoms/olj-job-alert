@@ -42,10 +42,8 @@ Think of it as a pipeline:
 
 ## Project Status
 
-**✅ Ready to Build:**
-- Job Sync (Workflow 0) — Scrapes and stores job postings
-
-**🔧 Coming Soon:**
+**✅ Complete:**
+- Job Sync (Workflow 0) — Scrapes and stores job postings every 2 minutes
 - Subscription Manager (Workflow 1) — Let you manage keywords via Telegram
 - Alert Notifier (Workflow 2) — Sends notifications when jobs match
 
@@ -59,20 +57,31 @@ Think of it as a pipeline:
    - Create a Telegram bot via @BotFather
 
 2. **Create the database:**
-   ```sql
-   CREATE TABLE job_postings (
-     id               SERIAL PRIMARY KEY,
-     job_id           BIGINT NOT NULL UNIQUE,
-     job_title        TEXT,
-     job_description  TEXT,
-     job_skills       TEXT,
-     type_of_work     TEXT,
-     compensation     TEXT,
-     hours_per_week   TEXT,
-     job_date         DATE,
-     created_at       TIMESTAMPTZ DEFAULT NOW()
-   );
-   ```
+    ```sql
+    CREATE TABLE job_postings (
+      id               SERIAL PRIMARY KEY,
+      job_id           BIGINT NOT NULL UNIQUE,
+      job_title        TEXT,
+      job_description  TEXT,
+      job_skills       TEXT,
+      type_of_work     TEXT,
+      compensation     TEXT,
+      hours_per_week   TEXT,
+      job_date         DATE,
+      is_processed     BOOLEAN DEFAULT FALSE,
+      created_at       TIMESTAMPTZ DEFAULT NOW()
+    );
+
+    CREATE TABLE user_subscriptions (
+      id          SERIAL PRIMARY KEY,
+      chat_id     BIGINT NOT NULL,
+      keyword     TEXT NOT NULL,
+      created_at  TIMESTAMPTZ DEFAULT NOW(),
+      UNIQUE(chat_id, keyword)
+    );
+
+    CREATE INDEX idx_job_postings_is_processed ON job_postings(is_processed);
+    ```
 
 3. **Build Workflow 0 in n8n:**
    - Create a schedule trigger (every 5-10 minutes)
@@ -89,19 +98,26 @@ Think of it as a pipeline:
 
 ## Next Steps
 
-Once Workflow 0 is working, you'll build:
-- Workflow 1: Telegram bot to subscribe to keywords
-- Workflow 2: Automatic alerts when jobs match your keywords
+All three workflows are complete and ready to use:
 
-See `spec.md` for detailed technical specifications.
+1. **Workflow 0** automatically scrapes job postings from OnlineJobs.ph every 2 minutes
+2. **Workflow 1** lets you subscribe to keywords via Telegram using `/keywordsub keyword1, keyword2, keyword3`
+3. **Workflow 2** automatically notifies you when a job matching your keywords is posted
+
+Simply start all three workflows in n8n and you're ready to receive job alerts!
+
+See `spec.md` for detailed technical specifications and implementation details.
 
 ---
 
 ## Notes
 
-- **Rate limiting:** Don't scrape too fast (default: 5-10 minutes)
-- **CSS selectors:** You'll need to inspect OnlineJobs.ph HTML to get the right selectors
-- **Modular design:** Each workflow is independent — build one at a time
+- **Rate limiting:** Current settings scrape 5 jobs every 2 minutes with 0.05s delays between requests
+- **Telegram commands:** Use `/keywordsub keyword1, keyword2, keyword3` to set your subscriptions (max 3 keywords)
+- **Modular design:** Each workflow operates independently through PostgreSQL as the data bus
+- **Replace-all behavior:** The `/keywordsub` command replaces all existing keywords, not additive
+- **HTML formatting:** Notifications use HTML formatting with emojis for better readability
+- **Job validation:** Only complete job postings (with description, type, compensation, date) are stored
 
 ---
 

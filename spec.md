@@ -11,11 +11,11 @@
 3. [Architecture](#architecture)
 4. [Database Schema](#database-schema)
 5. [Workflows](#workflows)
-   - [Workflow 0 — OnlineJobs.ph Job Sync](#workflow-0--onlinejobsph-job-sync)
-   - [Workflow 1 — Subscription Manager (TODO)](#workflow-1--subscription-manager-todo)
-   - [Workflow 2 — Job Alert Notifier (TODO)](#workflow-2--job-alert-notifier-todo)
-6. [Telegram Bot Commands (TODO)](#telegram-bot-commands-todo)
-7. [Notification Format (TODO)](#notification-format-todo)
+    - [Workflow 0 — OnlineJobs.ph Job Sync](#workflow-0--onlinejobsph-job-sync)
+    - [Workflow 1 — Subscription Manager](#workflow-1--subscription-manager)
+    - [Workflow 2 — Job Alert Notifier](#workflow-2--job-alert-notifier)
+6. [Telegram Bot Commands](#telegram-bot-commands)
+7. [Notification Format](#notification-format)
 8. [Tech Stack](#tech-stack)
 9. [Environment Variables](#environment-variables)
 10. [Constraints & Limitations](#constraints--limitations)
@@ -106,6 +106,7 @@ CREATE TABLE job_postings (
   compensation     TEXT,                     -- Salary/rate information
   hours_per_week   TEXT,                     -- Expected hours per week
   job_date         DATE,                     -- Date job was posted
+  is_processed     BOOLEAN DEFAULT FALSE,    -- Flag for alert processing
   created_at       TIMESTAMPTZ DEFAULT NOW()
 );
 ```
@@ -121,6 +122,7 @@ CREATE TABLE job_postings (
 | `compensation` | TEXT | Salary/rate info |
 | `hours_per_week` | TEXT | Expected hours |
 | `job_date` | DATE | Posting date |
+| `is_processed` | BOOLEAN | Flag indicating if job has been processed by alert workflow |
 | `created_at` | TIMESTAMPTZ | Row insert timestamp |
 
 ### `sync_errors` (optional, for logging failed scrapes)
@@ -170,143 +172,245 @@ CREATE TABLE user_subscriptions (
 
 ### Workflow 0 — OnlineJobs.ph Job Sync
 
-**Trigger**: Schedule Trigger (every `SYNC_SCHEDULE_MINUTES` minutes, default: 5-10)
+**Trigger**: Schedule Trigger (every 2 minutes)
 
 **Purpose**: Incrementally scrape new job postings from OnlineJobs.ph and batch insert into `job_postings` table.
 
 | Step | Node | Description |
 |---|---|---|
-| 1 | Schedule Trigger | Runs every N minutes (configurable) |
+| 1 | Schedule Trigger | Runs every 2 minutes |
 | 2 | Postgres | `SELECT job_id FROM job_postings ORDER BY job_id DESC LIMIT 1` (get last processed ID) |
-| 3 | Code | Initialize variables: `last_id` = result, `batch_size` = `SYNC_BATCH_SIZE`, `consecutive_404s` = 0, `counter` = 0, `failed_jobs` = [] |
-| 4 | Loop | While `counter < batch_size` AND `consecutive_404s < MAX_CONSECUTIVE_404S` |
-| 4a | HTTP Request | GET `https://www.onlinejobs.ph/jobseekers/job/{{ $json.last_id + 1 }}` |
-| 4b | Switch | Route by status code: 200, 404, or error |
-| 4c-200 | HTML Extract | Parse using CSS selectors (see Field Extraction below) |
-| 4d-200 | Postgres | `INSERT INTO job_postings (...) VALUES (...)` with `ON CONFLICT (job_id) DO NOTHING` |
-| 4e-200 | Code | `counter++`, `last_id++`, `consecutive_404s = 0` |
-| 4c-404 | Code | `consecutive_404s++`, `last_id++` |
-| 4c-error | Code | Retry logic (up to `MAX_RETRIES_PER_JOB` times), if still fail: log to `failed_jobs`, `last_id++` |
-| 5 | IF | Check if `failed_jobs.length > 0` |
-| 6 | Postgres (optional) | Log failed job IDs to a `sync_errors` table for manual review |
-| 7 | Stop | End workflow |
+| 3 | Code | Generate next 5 job IDs (last_id + 1 through last_id + 5) |
+| 4 | Split In Batches | Loop through the 5 job IDs |
+| 4a | Set | Store `job_id` from current iteration |
+| 4b | HTTP Request | GET `https://www.onlinejobs.ph/jobseekers/job/{{ $json.jobId }}` |
+| 4c | HTML Extract | Parse using CSS selectors (see Field Extraction below) |
+| 4d | IF | Check if job has valid data (non-empty description, type_of_work, compensation, job_date) |
+| 4e-false | Skip | Continue to next job ID if validation fails |
+| 4e-true | Set | Map extracted fields to database column names |
+| 4f-true | Postgres | `INSERT INTO job_postings (...) VALUES (...)` with `ON CONFLICT (job_id) DO NOTHING` |
+| 4g | Wait | 0.05 second delay between iterations |
+| 5 | Loop Back | Continue until all 5 job IDs processed |
+| 6 | Stop | End workflow |
 
 **Field Extraction (CSS Selectors):**
 
 | Field | CSS Selector |
 |---|---|
-| `job_title` | `h1.job-title` (adjust based on actual HTML) |
+| `job_title` | `h1` |
 | `job_description` | `.job-description` |
-| `job_skills` | `.job-skills` (comma-separated text) |
-| `type_of_work` | `.type-of-work` |
-| `compensation` | `.compensation` |
-| `hours_per_week` | `.hours-per-week` |
-| `job_date` | `.job-date` (parse to DATE format) |
+| `job_skills` | `.card-worker-topskill` |
+| `type_of_work` | `h3:contains("TYPE OF WORK") + p` |
+| `compensation` | `h3:contains("WAGE / SALARY") + p` |
+| `hours_per_week` | `h3:contains("HOURS PER WEEK") + p` |
+| `job_date` | `h3:contains("DATE UPDATED") + p` |
 
-**Retry Logic for Failed Requests:**
+**Validation Logic:**
 
-For each failed HTTP request (non-200, non-404):
-- Retry up to `MAX_RETRIES_PER_JOB` times (default: 3)
-- Use exponential backoff: 1s, 2s, 4s delays between retries
-- If all retries fail: increment `last_id`, log job_id to `failed_jobs`, continue
-- This ensures the sync continues even with intermittent network issues
+A job is only inserted to the database if ALL of the following fields are non-empty:
+- `job_description`
+- `type_of_work`
+- `compensation`
+- `job_date`
 
-**Stop Conditions:**
+This ensures only complete, high-quality job postings are stored.
 
-The workflow stops when **either** condition is met:
-1. Batch size reached: `counter >= SYNC_BATCH_SIZE` (default: 10-20 jobs)
-2. Consecutive 404s threshold: `consecutive_404s >= MAX_CONSECUTIVE_404S` (default: 5)
+**Implementation Details:**
 
-This handles sequential IDs with gaps — if we hit 5 consecutive 404s, we've likely reached the end of available job postings.
+- **Fixed batch size**: 5 jobs per workflow execution
+- **Schedule**: Every 2 minutes
+- **No retry logic**: If a job ID returns 404 or errors, the workflow continues to the next ID
+- **No consecutive 404 tracking**: The workflow simply processes the next 5 IDs regardless of status
+- **ON CONFLICT**: Uses PostgreSQL's upsert to prevent duplicate job_id entries
+- **Small delay**: 0.05 second wait between HTTP requests to avoid rate limiting
 
 **Rate Limiting Considerations:**
 
-- HTTP timeout: `HTTP_TIMEOUT_MS` (default: 10 seconds)
-- Small batch size (10-20) prevents overwhelming the server
-- Exponential backoff on retries respects the server
-- If you see rate-limit errors, increase `SYNC_SCHEDULE_MINUTES` or decrease `SYNC_BATCH_SIZE`
+- HTTP requests occur every 0.05 seconds within a batch
+- Total of 5 HTTP requests per 2-minute cycle
+- This conservative approach should avoid triggering anti-bot measures
+- If rate-limit errors occur, increase the schedule interval or add longer delays
 
 ---
 
-### Workflow 1 — Subscription Manager (TODO)
+### Workflow 1 — Subscription Manager
 
 **Trigger**: Telegram Trigger node (on incoming message)
 
 | Step | Node | Description |
 |---|---|---|
 | 1 | Telegram Trigger | Receives all incoming bot messages |
-| 2 | Switch | Routes by command: `/subscribe`, `/unsubscribe`, `/subscriptions` |
-| 3a | Code | Parses keyword from `/subscribe <keyword>`, sanitizes input |
-| 4a | Postgres | `INSERT INTO user_subscriptions` with `ON CONFLICT DO NOTHING` |
-| 5a | Telegram | Replies: `✅ Subscribed to "<keyword>"` |
-| 3b | Code | Parses keyword from `/unsubscribe <keyword>` |
-| 4b | Postgres | `DELETE FROM user_subscriptions WHERE chat_id = ? AND keyword = ?` |
-| 5b | Telegram | Replies: `❌ Unsubscribed from "<keyword>"` |
-| 3c | Postgres | `SELECT keyword FROM user_subscriptions WHERE chat_id = ?` |
-| 4c | Telegram | Replies with formatted list of active subscriptions |
+| 2 | IF | Check if message contains `/keywordsub` |
+| 3 | IF | Validate keyword count (max 3 keywords allowed) |
+| 4 | Set | Extract keywords from command (comma-separated) |
+| 5 | Postgres | DELETE all existing keywords for this chat_id |
+| 6 | Split Out | Split keyword array into individual items |
+| 7 | Split In Batches | Loop through each keyword |
+| 8 | Set | Prepare payload with chat_id and keyword |
+| 9 | Postgres | INSERT keyword into user_subscriptions |
+| 10 | Loop Back | Continue until all keywords inserted |
+| 11 | Set | Format success message with all subscribed keywords |
+| 12 | Telegram | Send confirmation message to user |
+
+**Command Format:**
+
+- `/keywordsub keyword1, keyword2, keyword3`
+- Keywords are comma-separated
+- Maximum 3 keywords per command
+- Whitespace around keywords is trimmed automatically
+- This command REPLACES all existing keywords for the user (not additive)
+
+**Implementation Details:**
+
+- **Replace-all behavior**: The workflow deletes all existing keywords for the chat_id before adding new ones
+- **Keyword validation**: Only processes messages containing `/keywordsub` command
+- **Count limit**: Maximum 3 keywords per submission (enforced by workflow validation)
+- **Duplicate prevention**: Database has UNIQUE constraint on (chat_id, keyword) combination
+- **Feedback**: User receives confirmation listing all their newly subscribed keywords
+
+**Error Handling:**
+
+- If more than 3 keywords provided, the workflow stops processing
+- Invalid or malformed commands are silently ignored (no error response)
+- Database insertion errors (violations) are handled by PostgreSQL constraints
 
 ---
 
-### Workflow 2 — Job Alert Notifier (TODO)
+### Workflow 2 — Job Alert Notifier
 
-**Trigger**: Postgres Trigger node on `INSERT` to `job_postings`
-*(Fallback: Schedule Trigger every 1–2 minutes, querying rows where `created_at > NOW() - INTERVAL '2 minutes'`)*
+**Trigger**: Schedule Trigger (every 20 seconds)
 
 | Step | Node | Description |
 |---|---|---|
-| 1 | Postgres Trigger | Fires on new row inserted into `job_postings` |
-| 2 | Postgres | Query `user_subscriptions` using `ILIKE` match against job_title + job_description |
-| 3 | IF | Stops execution if no subscribers matched |
-| 4 | Split In Batches | Iterates one subscriber at a time |
-| 5 | Telegram | Sends formatted alert to each `chat_id` |
+| 1 | Schedule Trigger | Runs every 20 seconds |
+| 2 | Postgres | SELECT 1 unprocessed job post (WHERE is_processed = false) |
+| 3 | IF | Check if unprocessed job exists |
+| 4 | Postgres | SELECT DISTINCT keywords from user_subscriptions |
+| 5 | Code | Match keywords against job title and description |
+| 6 | Code | Transform matched keywords to array |
+| 7 | IF | Check if any keywords matched |
+| 8 | Postgres | SELECT chat_ids for matched keywords |
+| 9 | Remove Duplicates | Deduplicate chat_ids (one message per user) |
+| 10 | Split In Batches | Loop through each subscriber |
+| 11 | Postgres | Update job post is_processed = true |
+| 12 | Telegram | Send HTML-formatted alert to subscriber |
+| 13 | Wait | 0.05 second delay between messages |
+| 14 | Loop Back | Continue until all subscribers notified |
+| 15 | Stop | End workflow |
 
-**Keyword match query:**
+**Keyword Matching Algorithm:**
 
-```sql
-SELECT DISTINCT chat_id
-FROM user_subscriptions
-WHERE '{{ $json.job_title }} {{ $json.job_description }}'
-  ILIKE '%' || keyword || '%';
+```javascript
+// 1. Get job data (title and description)
+const description = (jobData.job_description || "").toLowerCase();
+const title = (jobData.job_title || "").toLowerCase();
+const fullText = title + " " + description;
+
+// 2. Get all keywords from database
+const allKeywords = /* from SQL query */;
+
+// 3. Filter: Keep ONLY keywords found in the text
+const matchedKeywords = allKeywords.filter(kw => {
+  return fullText.includes(kw.toLowerCase());
+});
+
+// 4. Query subscribers for matched keywords
+// SQL: SELECT chat_id, keyword FROM user_subscriptions
+//      WHERE keyword = ANY(string_to_array(matched_keywords.join('|'), '|')::text[])
 ```
+
+**Processing Logic:**
+
+- **Polling approach**: Checks for unprocessed jobs every 20 seconds
+- **One job at a time**: Processes only 1 unprocessed job per execution
+- **Always marks processed**: Even if no keywords match, the job is marked as `is_processed = true` to prevent re-processing
+- **Duplicate prevention**: Uses `Remove Duplicates` node to ensure each user receives only one notification per job
+- **HTML formatting**: Telegram messages use HTML parse_mode for rich formatting with emojis
+
+**Notification Format:**
+
+```html
+<b>🔔 New Job Match!</b>
+
+<b>{job_title}</b>
+
+📝 <b>Description:</b>
+{job_description.substring(0, 120)}...
+
+💼 <b>Type:</b> {type_of_work}
+💰 <b>Pay:</b> {compensation}
+⏰ <b>Hours:</b> {hours_per_week}
+
+👉 <a href="https://www.onlinejobs.ph/jobseekers/job/{job_id}">Apply here!</a>
+```
+
+**Implementation Details:**
+
+- **Rate limiting**: 0.05 second delay between Telegram messages to avoid API limits
+- **Description truncation**: First 120 characters of job description shown
+- **Interactive link**: "Apply here!" is a clickable link to the job posting
+- **HTML tags**: Uses `<b>` for bold and `<a>` for links
+- **User-friendly**: Structured format with emojis for easy scanning
 
 ---
 
-## Telegram Bot Commands (TODO)
+## Telegram Bot Commands
 
 | Command | Description | Example |
 |---|---|---|
-| `/subscribe <keyword>` | Subscribe to a keyword | `/subscribe n8n` |
-| `/unsubscribe <keyword>` | Remove a keyword subscription | `/unsubscribe n8n` |
-| `/subscriptions` | List all active subscriptions | `/subscriptions` |
-| `/start` | Welcome message with usage instructions | `/start` |
+| `/keywordsub <keywords>` | Replace all subscriptions with new keywords (comma-separated, max 3) | `/keywordsub n8n, react, remote` |
+
+**Usage Notes:**
+- Keywords are comma-separated in a single command
+- Maximum 3 keywords allowed per submission
+- This command REPLACES all existing keywords (not additive)
+- Whitespace around keywords is automatically trimmed
+- Duplicate keywords in the same command are handled gracefully |
 
 ---
 
-## Notification Format (TODO)
+## Notification Format
 
+```html
+<b>🔔 New Job Match!</b>
+
+<b>{job_title}</b>
+
+📝 <b>Description:</b>
+{job_description.substring(0, 120)}...
+
+💼 <b>Type:</b> {type_of_work}
+💰 <b>Pay:</b> {compensation}
+⏰ <b>Hours:</b> {hours_per_week}
+
+👉 <a href="https://www.onlinejobs.ph/jobseekers/job/{job_id}">Apply here!</a>
 ```
-🔔 New job match for "n8n"
 
-Senior n8n Automation Developer
-Acme Remote Co.
+**Implementation Details:**
 
-Apply here → https://www.onlinejobs.ph/jobseekers/job/123456
-```
+- Uses Telegram HTML parse_mode for formatting
+- **Bold text**: Job title and field labels
+- **Emojis**: 🔔, 📝, 💼, 💰, ⏰, 👉 for visual hierarchy
+- **Description**: First 120 characters with ellipsis (...)
+- **Interactive link**: "Apply here!" is clickable and opens job posting
+- **Structured layout**: Key job details clearly separated for quick scanning
+- **Fields pulled from `job_postings`**: job_title, job_description, type_of_work, compensation, hours_per_week, job_id
 
-Fields pulled from `job_postings`: `job_title`, `compensation` (optional). The URL is constructed from `job_id`: `https://www.onlinejobs.ph/jobseekers/job/{job_id}`
+**Example:**
 
-**Enhanced format option:**
-```
-🔔 New job match for "n8n"
+```html
+<b>🔔 New Job Match!</b>
 
-📌 Senior n8n Automation Developer
-💰 PHP 50,000 - 80,000 / month
-⏱️ Full-time, 40 hours/week
+<b>Senior n8n Automation Developer</b>
 
-📝 Senior n8n Automation Developer needed for remote position...
-[truncated description]
+📝 <b>Description:</b>
+Looking for an experienced n8n developer to build automation workflows...
 
-Apply here → https://www.onlinejobs.ph/jobseekers/job/123456
+💼 <b>Type:</b> Full-time
+💰 <b>Pay:</b> PHP 50,000 - 80,000 / month
+⏰ <b>Hours:</b> 40 hours/week
+
+👉 <a href="https://www.onlinejobs.ph/jobseekers/job/123456">Apply here!</a>
 ```
 
 ---
@@ -327,20 +431,32 @@ Apply here → https://www.onlinejobs.ph/jobseekers/job/123456
 
 ### Sync Workflow Configuration (Workflow 0)
 
-| Variable | Description | Default |
+| Variable | Description | Value |
 |---|---|---|
-| `SYNC_SCHEDULE_MINUTES` | How often to run the job sync (minutes) | `5` |
-| `SYNC_BATCH_SIZE` | Max jobs to fetch per execution | `20` |
-| `MAX_CONSECUTIVE_404S` | Stop after this many consecutive 404s | `5` |
-| `MAX_RETRIES_PER_JOB` | Retry failed requests this many times | `3` |
-| `HTTP_TIMEOUT_MS` | HTTP request timeout in milliseconds | `10000` |
+| `SYNC_SCHEDULE_MINUTES` | How often to run the job sync | `2` |
+| `SYNC_BATCH_SIZE` | Max jobs to fetch per execution | `5` |
+| `HTTP_REQUEST_DELAY_SECONDS` | Delay between HTTP requests | `0.05` |
 
-### Alert Workflow Configuration (Workflows 1 & 2)
+### Subscription Manager Configuration (Workflow 1)
+
+| Variable | Description | Value |
+|---|---|---|
+| `MAX_KEYWORDS_PER_COMMAND` | Maximum keywords allowed in /keywordsub | `3` |
+
+### Alert Notifier Configuration (Workflow 2)
+
+| Variable | Description | Value |
+|---|---|---|
+| `POLL_INTERVAL_SECONDS` | How often to check for unprocessed jobs | `20` |
+| `TELEGRAM_MESSAGE_DELAY_SECONDS` | Delay between Telegram messages | `0.05` |
+| `JOB_DESCRIPTION_TRUNCATE_CHARS` | Number of characters to show in alert | `120` |
+
+### Required Credentials
 
 | Variable | Description |
 |---|---|
 | `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
-| `DATABASE_URL` | PostgreSQL connection string |
+| `DATABASE_URL` | PostgreSQL connection string: `postgresql://job_alert_client:password@localhost:5432/oljalerts` |
 | `N8N_WEBHOOK_URL` | Base URL for n8n webhook endpoints (if self-hosted) |
 
 ---
@@ -348,18 +464,28 @@ Apply here → https://www.onlinejobs.ph/jobseekers/job/123456
 ## Constraints & Limitations
 
 ### Scraping & Data Sync (Workflow 0)
-- **Rate limiting risk** — Scraping every 5-10 minutes may trigger anti-bot measures. Monitor for 429 errors and adjust `SYNC_SCHEDULE_MINUTES` if needed.
+- **Rate limiting risk** — Scraping every 2 minutes with 5 requests per batch may trigger anti-bot measures. Monitor for 429 errors and adjust schedule or delay if needed.
 - **CSS selector fragility** — HTML structure changes on OnlineJobs.ph will break field extraction. Needs maintenance when job pages change.
-- **Sequential IDs with gaps** — Job IDs are sequential but may skip numbers (deleted jobs, drafts). The workflow handles this via `MAX_CONSECUTIVE_404S` threshold.
+- **No sequential ID tracking** — The workflow simply processes next 5 job IDs regardless of gaps or 404s. This may skip valid jobs if there are large gaps.
+- **No retry logic** — If a job ID returns 404 or errors, the workflow continues to the next ID without retrying.
 - **No company name extraction** — Currently not extracting employer name. Can be added if needed.
-- **Failed jobs are skipped** — After 3 retries, failed jobs are skipped and not retried. Check `sync_errors` table for review.
+- **Failed jobs are skipped** — Jobs that fail validation (missing required fields) are silently skipped and not logged.
 
-### Alert System (Workflows 1 & 2)
+### Subscription Manager (Workflow 1)
+- **Replace-all behavior** — The `/keywordsub` command deletes all existing keywords before adding new ones. Users cannot add/remove individual keywords.
+- **No unsubscribe command** — Users must use `/keywordsub` with their desired keywords to replace their subscription.
+- **No subscriptions list command** — Users cannot view their current subscriptions via the bot.
+- **No keyword validation** — Keywords are not validated for relevance or appropriateness.
+- **Single command** — Only `/keywordsub` is implemented. No `/start`, `/help`, or other bot commands.
+
+### Alert Notifier (Workflow 2)
 - **Keyword matching is simple substring search** — no fuzzy matching or synonyms. A subscription to `react` will also match `react native` and `proactive`.
-- **No deduplication across runs** — if using polling fallback, the query window must be carefully managed to avoid duplicate alerts.
-- **Telegram rate limit** — Telegram allows ~30 messages/second per bot. Use `Split In Batches` with a small delay for large subscriber counts.
-- **User input sanitization** — keywords containing SQL wildcard characters (`%`, `_`) must be escaped before storage to prevent unintended broad matches.
-- **Single keyword per subscription row** — users subscribing to multiple keywords create one row each. This is intentional for easy management.
+- **One job per execution** — Only processes 1 unprocessed job per 20-second cycle. May not keep up with high-volume job postings.
+- **Polling vs triggers** — Uses polling approach (every 20 seconds) instead of PostgreSQL triggers. May introduce slight delay in notifications.
+- **No deduplication across runs** — The `is_processed` flag prevents re-processing, but if a job is skipped (validation failure), it may be re-attempted.
+- **Telegram rate limit** — Telegram allows ~30 messages/second per bot. Current 0.05 second delay is well within limits.
+- **No keyword escaping** — Keywords containing special characters may cause unexpected matching behavior.
+- **No feedback loop** — Users cannot provide feedback on job relevance (like/dislike) to improve matching.
 
 ---
 
@@ -371,12 +497,32 @@ Apply here → https://www.onlinejobs.ph/jobseekers/job/123456
 - **Incremental deduplication check** — Use HTTP HEAD requests before full GET to avoid downloading duplicate content
 - **Scrape job listings for efficiency** — Fetch multiple jobs in one request from a listings page instead of individual job pages
 - **RSS feed monitoring** — If OnlineJobs.ph provides RSS feeds, use instead of scraping
-- **Verify CSS selectors** — **TODO**: Inspect actual OnlineJobs.ph job page HTML and update CSS selectors accordingly
+- **Retry logic** — Add retry mechanism for failed HTTP requests with exponential backoff
+- **Sequential gap handling** — Implement logic to track and handle large gaps in job IDs
+- **Error logging** — Add `sync_errors` table to log failed job IDs for manual review
 
-### Alert System (Workflows 1 & 2)
-- **Multi-keyword subscriptions** — allow comma-separated keywords in a single `/subscribe` command
-- **Keyword categories / tags** — let users subscribe to predefined categories instead of free-text keywords
-- **Alert frequency control** — daily digest mode vs. instant alerts
-- **Duplicate prevention flag** — `notified` boolean on `job_postings` to guarantee at-most-once delivery
-- **Admin dashboard** — simple n8n or web UI to view subscriber stats and recent alerts
-- **OLJAlerts web landing page** — public page explaining the bot with a `/start` deep link
+### Subscription Manager (Workflow 1)
+- **Add/remove individual keywords** — Implement `/addkeyword` and `/removekeyword` commands for granular control
+- **List subscriptions command** — Add `/listkeywords` command to show current subscriptions
+- **Help/start command** — Implement `/start` and `/help` commands with usage instructions
+- **Keyword categories / tags** — Let users subscribe to predefined categories instead of free-text keywords
+- **Keyword suggestions** — Suggest popular keywords based on existing job postings
+- **Subscription validation** — Validate keywords for relevance and appropriateness
+- **Unsubscribe all** — Add command to remove all subscriptions at once
+
+### Alert Notifier (Workflow 2)
+- **PostgreSQL triggers** — Replace polling with database triggers for real-time notifications
+- **Batch processing** — Process multiple unprocessed jobs per execution to handle high volume
+- **Alert frequency control** — Daily digest mode vs. instant alerts (user preference)
+- **Keyword importance scoring** — Prioritize notifications based on keyword match quality
+- **User feedback** — Allow users to like/dislike jobs to improve matching relevance
+- **Notification throttling** — Prevent spam by limiting notifications per user per day
+- **Richer formatting** — Include more job details like skills, requirements, etc.
+- **Apply button** — Add inline button in Telegram to open job application directly
+
+### General
+- **Admin dashboard** — Simple n8n or web UI to view subscriber stats and recent alerts
+- **OLJAlerts web landing page** — Public page explaining the bot with a `/keywordsub` deep link
+- **Analytics** — Track popular keywords, job posting trends, user engagement
+- **Multi-user support** — Support multiple Telegram users with different subscriptions
+- **Keyword matching improvements** — Fuzzy matching, synonyms, advanced NLP techniques
