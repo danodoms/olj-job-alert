@@ -1,0 +1,519 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "updates": [
+          "message"
+        ],
+        "additionalFields": {}
+      },
+      "type": "n8n-nodes-base.telegramTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        0,
+        0
+      ],
+      "id": "d27efa50-f4ff-4ec3-9816-1c75a35ee9e3",
+      "name": "Telegram Trigger",
+      "webhookId": "947b7b57-65a3-4fe7-8891-ac5ee6ca23dc",
+      "credentials": {
+        "telegramApi": {
+          "id": "2Izdb1Nh53OzgsTq",
+          "name": "OLJ Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "9f9386f9-2317-4247-86b1-b6790d04315c",
+              "leftValue": "={{ $json.message.text }}",
+              "rightValue": "=keywordsub",
+              "operator": {
+                "type": "string",
+                "operation": "contains"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {
+          "ignoreCase": true
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        208,
+        0
+      ],
+      "id": "7e11900b-bd24-411a-9e22-1d46cf861b3d",
+      "name": "If keywordsub"
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 3
+          },
+          "conditions": [
+            {
+              "id": "4642ec3f-842c-4af6-8d7a-78d56e1521db",
+              "leftValue": "={{ $json.message.text.replaceAll('/keywordsub', '').trim().split(',').length<=3 }}",
+              "rightValue": "",
+              "operator": {
+                "type": "boolean",
+                "operation": "true",
+                "singleValue": true
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "looseTypeValidation": true,
+        "options": {
+          "ignoreCase": true
+        }
+      },
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        448,
+        0
+      ],
+      "id": "20f9b997-eb18-4638-87ef-1f3feddc016d",
+      "name": "If keywordsub <= 3"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "bcdbf512-0c4f-4005-9258-29650d5d5e49",
+              "name": "keywordsub",
+              "value": "={{ $json.message.text.replaceAll('/keywordsub', '').trim().split(',').map(item => item.trim()) }}",
+              "type": "array"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        688,
+        0
+      ],
+      "id": "96fda4b6-6a7b-4f8c-8a44-03a74085a757",
+      "name": "Extract keywords"
+    },
+    {
+      "parameters": {
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "user_subscriptions",
+          "mode": "list",
+          "cachedResultName": "user_subscriptions"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {
+            "id": 0,
+            "chat_id": 0
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "chat_id",
+              "displayName": "chat_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "keyword",
+              "displayName": "keyword",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true,
+              "removed": false
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1712,
+        16
+      ],
+      "id": "df0eab69-3721-4f2f-9d5e-febc4be5fcb7",
+      "name": "Insert rows in a table",
+      "credentials": {
+        "postgres": {
+          "id": "ZzBIvq2za0U7odoL",
+          "name": "job_alert_client"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "8cf973ea-3b40-4a0f-9f96-f461e073cd4f",
+              "name": "chat_id",
+              "value": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+              "type": "string"
+            },
+            {
+              "id": "7c24e635-4ecd-48d8-821a-c1274552dba6",
+              "name": "keyword",
+              "value": "={{ $json.keywordsub }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1504,
+        16
+      ],
+      "id": "73ef25b0-b3c5-4dd0-99f1-abd81ccd0aa5",
+      "name": "Prepare payload"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1104,
+        0
+      ],
+      "id": "f5a769e4-cffc-4da0-950e-6cebedc1f526",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "content": "## Delete previous keywords if exists",
+        "height": 256,
+        "width": 448,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        -352
+      ],
+      "id": "6d9c0f42-f334-46f2-abab-86873de544e8",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "operation": "deleteTable",
+        "schema": {
+          "__rl": true,
+          "mode": "list",
+          "value": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "user_subscriptions",
+          "mode": "list",
+          "cachedResultName": "user_subscriptions"
+        },
+        "deleteCommand": "delete",
+        "where": {
+          "values": [
+            {
+              "column": "chat_id",
+              "value": "={{ $('Telegram Trigger').item.json.message.chat.id }}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1504,
+        -272
+      ],
+      "id": "feab3512-349f-4754-b5a1-0d0ae14982df",
+      "name": "Delete table or rows",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZzBIvq2za0U7odoL",
+          "name": "job_alert_client"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Add new keywords",
+        "height": 256,
+        "width": 448,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1440,
+        -64
+      ],
+      "id": "62af23c9-eccf-4e78-accb-6a87617d6642",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "content": "## Notify user",
+        "height": 256,
+        "width": 448,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1984,
+        -224
+      ],
+      "id": "f12787b8-30ec-404b-a7ed-6149aabccfdd",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Loop Over Items').item.json.chat_id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2256,
+        -144
+      ],
+      "id": "65be60db-f444-43d1-9897-036f5f174db6",
+      "name": "Send a text message",
+      "webhookId": "56c71022-e284-4348-ad05-2c51554bebd4",
+      "executeOnce": true,
+      "credentials": {
+        "telegramApi": {
+          "id": "2Izdb1Nh53OzgsTq",
+          "name": "OLJ Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "fieldToSplitOut": "keywordsub",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitOut",
+      "typeVersion": 1,
+      "position": [
+        896,
+        0
+      ],
+      "id": "ab28eeba-f42c-4579-9b7d-39f8956c3f6c",
+      "name": "Split Out"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "403798b5-edde-4a88-b1ef-2fce5bcc81a3",
+              "name": "message",
+              "value": "=✅ **Subscription Updated**\n\nYour new keywords:\n• {{ $('Telegram Trigger').first().json.message.text.replaceAll('/keywordsub ', '').trim().split(',').map(k => k.trim()).join('\\n• ') }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        2032,
+        -144
+      ],
+      "id": "572111de-3ffd-48d3-be12-d124c11e0a2c",
+      "name": "Set Payload",
+      "executeOnce": true
+    }
+  ],
+  "connections": {
+    "Telegram Trigger": {
+      "main": [
+        [
+          {
+            "node": "If keywordsub",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If keywordsub": {
+      "main": [
+        [
+          {
+            "node": "If keywordsub <= 3",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "If keywordsub <= 3": {
+      "main": [
+        [
+          {
+            "node": "Extract keywords",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract keywords": {
+      "main": [
+        [
+          {
+            "node": "Split Out",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Delete table or rows",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Insert rows in a table": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare payload": {
+      "main": [
+        [
+          {
+            "node": "Insert rows in a table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Set Payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Split Out": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Payload": {
+      "main": [
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f593b1bde7a656a109af29ca03677e894cc660fc016075f84ae5399c2f124339"
+  }
+}
