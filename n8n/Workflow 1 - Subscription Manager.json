@@ -10,8 +10,8 @@
       "type": "n8n-nodes-base.telegramTrigger",
       "typeVersion": 1.2,
       "position": [
-        0,
-        0
+        -400,
+        -16
       ],
       "id": "d27efa50-f4ff-4ec3-9816-1c75a35ee9e3",
       "name": "Telegram Trigger",
@@ -407,7 +407,7 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        464,
+        384,
         208
       ],
       "id": "61b245be-c482-480f-8775-81efe79e1c10",
@@ -441,7 +441,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        528,
+        448,
         288
       ],
       "id": "6584551e-11d9-49b2-a061-8e4d318026a8",
@@ -465,7 +465,7 @@
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        928,
+        848,
         288
       ],
       "id": "3ccece0f-81c9-49c1-beb3-13d52aa261af",
@@ -496,7 +496,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        720,
+        640,
         288
       ],
       "id": "7cb52709-a2cc-4657-b467-7baea1adb79c",
@@ -538,6 +538,141 @@
       ],
       "id": "e9108827-7fb2-493e-a6c9-aac3f46088fe",
       "name": "If unsub"
+    },
+    {
+      "parameters": {
+        "rules": {
+          "values": [
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "leftValue": "={{ $json.message.text }}",
+                    "rightValue": "/keywordsub",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    },
+                    "id": "e4eda79c-e4cd-4faf-a753-4be1ca631976"
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "keywordsub"
+            },
+            {
+              "conditions": {
+                "options": {
+                  "caseSensitive": false,
+                  "leftValue": "",
+                  "typeValidation": "loose",
+                  "version": 3
+                },
+                "conditions": [
+                  {
+                    "id": "7ea76fa5-aee5-4393-afc8-2608d7960bf0",
+                    "leftValue": "={{ $json.message.text }}",
+                    "rightValue": "/unsub",
+                    "operator": {
+                      "type": "string",
+                      "operation": "contains"
+                    }
+                  }
+                ],
+                "combinator": "and"
+              },
+              "renameOutput": true,
+              "outputKey": "unsub"
+            }
+          ]
+        },
+        "looseTypeValidation": true,
+        "options": {
+          "fallbackOutput": "extra",
+          "ignoreCase": true,
+          "renameFallbackOutput": "fallback"
+        }
+      },
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        -160,
+        -32
+      ],
+      "id": "28682329-d221-4be7-a6e1-51b3bcabd0bc",
+      "name": "Switch"
+    },
+    {
+      "parameters": {
+        "content": "## Help users",
+        "height": 256,
+        "width": 624,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        160,
+        528
+      ],
+      "id": "4059b746-739a-46e8-9590-42698b88da79",
+      "name": "Sticky Note4"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $('Telegram Trigger').item.json.message.chat.id }}",
+        "text": "={{ $json.message }}",
+        "additionalFields": {
+          "appendAttribution": false
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        432,
+        608
+      ],
+      "id": "1f286eb3-1492-43a1-b91e-74883faffe60",
+      "name": "Send a text message2",
+      "webhookId": "56c71022-e284-4348-ad05-2c51554bebd4",
+      "executeOnce": true,
+      "credentials": {
+        "telegramApi": {
+          "id": "2Izdb1Nh53OzgsTq",
+          "name": "OLJ Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "403798b5-edde-4a88-b1ef-2fce5bcc81a3",
+              "name": "message",
+              "value": "=🪧 **Help is here, here's an example command:**\n\n/keywordsub virtual assistant, accountant, crm",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        224,
+        608
+      ],
+      "id": "a935ef41-1128-46cf-a4a3-9e082d22aa95",
+      "name": "Set Payload2",
+      "executeOnce": true
     }
   ],
   "connections": {
@@ -545,12 +680,7 @@
       "main": [
         [
           {
-            "node": "If keywordsub",
-            "type": "main",
-            "index": 0
-          },
-          {
-            "node": "If unsub",
+            "node": "Switch",
             "type": "main",
             "index": 0
           }
@@ -684,6 +814,42 @@
         [
           {
             "node": "Delete table or rows1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch": {
+      "main": [
+        [
+          {
+            "node": "If keywordsub",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "If unsub",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Set Payload2",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Payload2": {
+      "main": [
+        [
+          {
+            "node": "Send a text message2",
             "type": "main",
             "index": 0
           }
