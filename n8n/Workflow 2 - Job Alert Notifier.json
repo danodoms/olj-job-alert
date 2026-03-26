@@ -176,7 +176,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        1232,
+        1520,
         0
       ],
       "id": "5a27ff79-ae2e-4426-b118-60013b5131dc",
@@ -198,7 +198,7 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        1936,
+        2224,
         -80
       ],
       "id": "7f9333fe-3f12-4060-b47d-e029d2ca93b5",
@@ -213,7 +213,7 @@
       "type": "n8n-nodes-base.removeDuplicates",
       "typeVersion": 2,
       "position": [
-        1440,
+        1728,
         0
       ],
       "id": "955985df-bd29-4b49-89ec-c2b04acf862f",
@@ -226,7 +226,7 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        1744,
+        2032,
         0
       ],
       "id": "d65e9cd7-bfe9-49e1-baca-6e14856eabcb",
@@ -244,7 +244,7 @@
       "type": "n8n-nodes-base.telegram",
       "typeVersion": 1.2,
       "position": [
-        1984,
+        2272,
         0
       ],
       "id": "b9810fe7-8115-4a6e-b7ae-0e491d5e2d2e",
@@ -265,7 +265,7 @@
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        2192,
+        2480,
         0
       ],
       "id": "4829a636-de18-43f2-b8b9-d73f31f00e5d",
@@ -407,7 +407,7 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        2192,
+        2480,
         -320
       ],
       "id": "8fdf9ea7-1bb4-41d0-8091-b281995a679b",
@@ -429,7 +429,7 @@
       "type": "n8n-nodes-base.stickyNote",
       "typeVersion": 1,
       "position": [
-        1936,
+        2224,
         -400
       ],
       "id": "cce4c38c-895a-4da2-ab09-6f272bb6e49f",
@@ -458,7 +458,7 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1984,
+        2272,
         -320
       ],
       "id": "f630e5bb-a831-423d-a3e5-2dd6162f340b",
@@ -466,7 +466,7 @@
     },
     {
       "parameters": {
-        "jsCode": "// 1. Get the Job Data using the reliable syntax\nconst jobData = $('Select 1 unprocessed job post').first().json;\n\nconst description = (jobData.job_description || \"\").toLowerCase();\nconst title = (jobData.job_title || \"\").toLowerCase();\nconst fullText = title + \" \" + description;\n\n// 2. Get all keywords from the input (from the 'Get Active Keywords' SQL node)\nconst allKeywords = $input.all().map(item => item.json.keyword);\n\n// 3. Filter: Keep ONLY keywords found in the text\nconst matchedKeywords = allKeywords.filter(kw => {\n  return fullText.includes(kw.toLowerCase());\n});\n\n// 4. Return the filtered list (Items) so the next node can process them\nreturn matchedKeywords.map(kw => ({ json: { keyword: kw } }));"
+        "jsCode": "// 1. Get the Job Data using the reliable syntax\nconst jobData = $('Select 1 unprocessed job post').first().json;\n\nconst description = (jobData.job_description || \"\").toLowerCase();\nconst title = (jobData.job_title || \"\").toLowerCase();\nconst fullText = title + \" \" + description;\n\n// 2. Get all keywords from the input (from the 'Get Active Keywords' SQL node)\nconst allKeywords = $input.all().map(item => item.json.keyword);\n\n// 3. Filter: Keep ONLY keywords found in the text\nconst matchedKeywords = allKeywords.filter(kw => {\n  // Escape special regex characters\n  const escapedKw = kw.toLowerCase().replace(/[.*+?^${}()|[\\]\\\\]/g, '\\\\$&');\n  // Use word boundary matching\n  const regex = new RegExp(`\\\\b${escapedKw}\\\\b`, 'i');\n  return regex.test(fullText);\n});\n\n// 4. Return the filtered list (Items) so the next node can process them\nreturn matchedKeywords.map(kw => ({ json: { keyword: kw } }));"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
@@ -751,6 +751,104 @@
         }
       },
       "disabled": true
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "0fe1ff71-ef45-4b52-ab61-9910c83e401c",
+              "name": "matched_keywords",
+              "value": "={{ $json.matched_keywords.join('|') }}",
+              "type": "string"
+            },
+            {
+              "id": "8d90188b-3289-4a4a-aa8b-a504240aa7b9",
+              "name": "job_postings_table_row_id",
+              "value": "={{ $('Select 1 unprocessed job post').first().json.id }}",
+              "type": "string"
+            },
+            {
+              "id": "f20fff52-e8cc-47f7-b327-a3de011fd0e8",
+              "name": "job_title",
+              "value": "={{ $('Select 1 unprocessed job post').first().json.job_title }}",
+              "type": "string"
+            },
+            {
+              "id": "55ec0f86-5db7-47dd-afed-1c9c3a2b2fde",
+              "name": "job_description",
+              "value": "={{ $('Select 1 unprocessed job post').first().json.job_description.substring(0, 120) }}",
+              "type": "string"
+            },
+            {
+              "id": "9a8b9ab0-8b89-4527-8c79-b8ae97b7b569",
+              "name": "type_of_work",
+              "value": "={{ $('Select 1 unprocessed job post').first().json.type_of_work }}",
+              "type": "string"
+            },
+            {
+              "id": "fcc5c922-ade3-440e-9f26-e1fe460995f9",
+              "name": "compensation",
+              "value": "={{ $('Select 1 unprocessed job post').first().json.compensation }}",
+              "type": "string"
+            },
+            {
+              "id": "9893dc83-fd09-4f35-b6b3-7ff97aad19ae",
+              "name": "hours_per_week",
+              "value": "={{ $('Select 1 unprocessed job post').first().json.hours_per_week }}",
+              "type": "string"
+            },
+            {
+              "id": "a9fa2183-11ce-494f-94b6-0128c1ea47de",
+              "name": "job_id",
+              "value": "={{ $('Select 1 unprocessed job post').first().json.job_id }}",
+              "type": "string"
+            },
+            {
+              "id": "81caf25c-5182-4c76-9469-1fb7eddadd5e",
+              "name": "job_postings_table_row_id",
+              "value": "={{ $('Select 1 unprocessed job post').first().json.id }}",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1328,
+        -320
+      ],
+      "id": "d33bd1f4-3e54-4023-a1ec-a2b683bacd3c",
+      "name": "Set required variables"
+    },
+    {
+      "parameters": {
+        "workflowId": {
+          "__rl": true,
+          "value": "lMI8IGyOl1u0ibLx",
+          "mode": "id",
+          "cachedResultUrl": "/workflow/lMI8IGyOl1u0ibLx"
+        },
+        "workflowInputs": {
+          "mappingMode": "defineBelow",
+          "value": {},
+          "matchingColumns": [],
+          "schema": [],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": true
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.executeWorkflow",
+      "typeVersion": 1.3,
+      "position": [
+        1536,
+        -320
+      ],
+      "id": "80dec404-d226-4b89-875c-86ad2a10ba51",
+      "name": "Call 'Workflow 2 - Job Alert Notifier subworkflow'"
     }
   ],
   "connections": {
@@ -897,7 +995,7 @@
       "main": [
         [
           {
-            "node": "Execute a SQL query1",
+            "node": "Set required variables",
             "type": "main",
             "index": 0
           }
@@ -930,6 +1028,17 @@
     "Webhook": {
       "main": [
         []
+      ]
+    },
+    "Set required variables": {
+      "main": [
+        [
+          {
+            "node": "Call 'Workflow 2 - Job Alert Notifier subworkflow'",
+            "type": "main",
+            "index": 0
+          }
+        ]
       ]
     }
   },

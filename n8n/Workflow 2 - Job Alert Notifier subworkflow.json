@@ -1,0 +1,425 @@
+{
+  "nodes": [
+    {
+      "parameters": {
+        "content": "## Find subscribers",
+        "height": 256,
+        "width": 608,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1024,
+        -80
+      ],
+      "id": "3848702c-3f11-42b7-8c25-c6704f2ac6ec",
+      "name": "Sticky Note"
+    },
+    {
+      "parameters": {
+        "operation": "executeQuery",
+        "query": "SELECT chat_id, keyword\nFROM user_subscriptions\nWHERE keyword = ANY(string_to_array($1, '|')::text[])",
+        "options": {
+          "queryReplacement": "={{ $json.matched_keywords }}"
+        }
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        1232,
+        0
+      ],
+      "id": "33daf7a9-cdfc-4a20-b0fd-2c42adb6aa7a",
+      "name": "Execute a SQL query1",
+      "credentials": {
+        "postgres": {
+          "id": "ZzBIvq2za0U7odoL",
+          "name": "job_alert_client"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Message subscribers",
+        "height": 256,
+        "width": 512,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1936,
+        -80
+      ],
+      "id": "fae8c41b-24ba-46c4-b1d1-be6119e33028",
+      "name": "Sticky Note1"
+    },
+    {
+      "parameters": {
+        "compare": "selectedFields",
+        "fieldsToCompare": "chat_id",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
+      "position": [
+        1440,
+        0
+      ],
+      "id": "44f3860d-6ff2-4df8-a67f-97e410a0314a",
+      "name": "Remove Duplicates"
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1744,
+        0
+      ],
+      "id": "5e85cefe-c902-4817-9844-066b792eca71",
+      "name": "Loop Over Items"
+    },
+    {
+      "parameters": {
+        "chatId": "={{ $json.chat_id }}",
+        "text": "=<b>🔔 New Job Match!</b>\n\n<b>{{ $('When Executed by Another Workflow').first().json.job_title }}</b>\n\n📝 <b>Description:</b>\n{{ $('When Executed by Another Workflow').first().json.job_description.substring(0, 120) }}...\n\n💼 <b>Type:</b> {{ $('When Executed by Another Workflow').first().json.type_of_work }}\n💰 <b>Pay:</b> {{ $('When Executed by Another Workflow').first().json.compensation }}\n⏰ <b>Hours:</b> {{ $('When Executed by Another Workflow').first().json.hours_per_week }}\n\n👉 <a href=\"https://www.onlinejobs.ph/jobseekers/job/{{ $('When Executed by Another Workflow').first().json.job_id }}\">Apply here!</a>",
+        "additionalFields": {
+          "appendAttribution": false,
+          "parse_mode": "HTML"
+        }
+      },
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        1984,
+        0
+      ],
+      "id": "5e1adbff-713e-4780-a316-a62351d3e1e8",
+      "name": "Send a text message",
+      "webhookId": "feb7dace-92cd-40de-b934-328a31f2c5c1",
+      "retryOnFail": true,
+      "credentials": {
+        "telegramApi": {
+          "id": "2Izdb1Nh53OzgsTq",
+          "name": "OLJ Alert Bot"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "amount": 0.25
+      },
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2192,
+        0
+      ],
+      "id": "4a903dfe-8720-4593-a88f-42fbe89e99a4",
+      "name": "Wait",
+      "webhookId": "400b82bc-898e-40d6-87ae-582061127a5c"
+    },
+    {
+      "parameters": {
+        "operation": "update",
+        "schema": {
+          "__rl": true,
+          "value": "public",
+          "mode": "list",
+          "cachedResultName": "public"
+        },
+        "table": {
+          "__rl": true,
+          "value": "job_postings",
+          "mode": "list",
+          "cachedResultName": "job_postings"
+        },
+        "columns": {
+          "mappingMode": "autoMapInputData",
+          "value": {
+            "is_processed": false,
+            "id": 0,
+            "job_id": 0
+          },
+          "matchingColumns": [
+            "id"
+          ],
+          "schema": [
+            {
+              "id": "id",
+              "displayName": "id",
+              "required": false,
+              "defaultMatch": true,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true,
+              "removed": false
+            },
+            {
+              "id": "job_id",
+              "displayName": "job_id",
+              "required": true,
+              "defaultMatch": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_title",
+              "displayName": "job_title",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_description",
+              "displayName": "job_description",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_skills",
+              "displayName": "job_skills",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "type_of_work",
+              "displayName": "type_of_work",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "compensation",
+              "displayName": "compensation",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "hours_per_week",
+              "displayName": "hours_per_week",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "job_date",
+              "displayName": "job_date",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "created_at",
+              "displayName": "created_at",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "dateTime",
+              "canBeUsedToMatch": true
+            },
+            {
+              "id": "is_processed",
+              "displayName": "is_processed",
+              "required": false,
+              "defaultMatch": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": true
+            }
+          ],
+          "attemptToConvertTypes": false,
+          "convertFieldsToString": false
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
+      "position": [
+        2192,
+        -320
+      ],
+      "id": "95800171-76cc-48e6-8428-d87f9c0ea826",
+      "name": "Update rows in a table",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZzBIvq2za0U7odoL",
+          "name": "job_alert_client"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "content": "## Flag processed job post",
+        "height": 256,
+        "width": 512,
+        "color": 4
+      },
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1936,
+        -400
+      ],
+      "id": "bae662cd-6ca6-4de6-b337-75b9a34eac14",
+      "name": "Sticky Note2"
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cec2d0e1-3753-451a-94ee-f80a2ec6261a",
+              "name": "id",
+              "value": "={{ $('When Executed by Another Workflow').first().json.job_postings_table_row_id }}",
+              "type": "string"
+            },
+            {
+              "id": "b1663826-7474-4436-b8bd-28926f82e7d9",
+              "name": "is_processed",
+              "value": true,
+              "type": "boolean"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1984,
+        -320
+      ],
+      "id": "59ada965-13b9-4e56-8fce-77ff57c1a9fd",
+      "name": "Set payload",
+      "executeOnce": true
+    },
+    {
+      "parameters": {
+        "inputSource": "passthrough"
+      },
+      "type": "n8n-nodes-base.executeWorkflowTrigger",
+      "typeVersion": 1.1,
+      "position": [
+        992,
+        0
+      ],
+      "id": "74a0205f-2d71-48d4-9289-9718077ab565",
+      "name": "When Executed by Another Workflow"
+    }
+  ],
+  "connections": {
+    "Execute a SQL query1": {
+      "main": [
+        [
+          {
+            "node": "Remove Duplicates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove Duplicates": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Over Items": {
+      "main": [
+        [
+          {
+            "node": "Set payload",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Send a text message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send a text message": {
+      "main": [
+        [
+          {
+            "node": "Wait",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait": {
+      "main": [
+        [
+          {
+            "node": "Loop Over Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set payload": {
+      "main": [
+        [
+          {
+            "node": "Update rows in a table",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "When Executed by Another Workflow": {
+      "main": [
+        [
+          {
+            "node": "Execute a SQL query1",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "f593b1bde7a656a109af29ca03677e894cc660fc016075f84ae5399c2f124339"
+  }
+}
