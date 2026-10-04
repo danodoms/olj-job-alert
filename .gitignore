@@ -1,2 +1,7 @@
 *.bkp
 session-*.md
+# Build artifacts
+node_modules/
+dist/
+.env
+.DS_Store
