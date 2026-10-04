@@ -1,17 +1,18 @@
 services:
-  n8n:
-    image: docker.n8n.io/n8nio/n8n
-    container_name: n8n
+  app:
+    build: .
+    container_name: oljalerts-app
     restart: unless-stopped
-    ports:
-      - "5678:5678"
     environment:
-      GENERIC_TIMEZONE: Asia/Manila
-      TZ: Asia/Manila
-      N8N_ENFORCE_SETTINGS_FILE_PERMISSIONS: "true"
-      N8N_RUNNERS_ENABLED: "true"
-    volumes:
-      - n8n_data:/home/node/.n8n
+      DATABASE_URL: postgresql://job_alert_client:job_alert_client_password@postgres:5432/oljalerts
+      SYNC_INTERVAL_MS: 120000
+      SYNC_BATCH: 5
+      NOTIFIER_INTERVAL_MS: 20000
+    env_file:
+      - .env
+    depends_on:
+      postgres:
+        condition: service_healthy
 
   postgres:
     image: postgres:16
@@ -33,5 +34,4 @@ services:
       retries: 10
 
 volumes:
-  n8n_data:
   postgres_data:
