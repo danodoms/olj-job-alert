@@ -6,7 +6,7 @@
           "interval": [
             {
               "field": "minutes",
-              "minutesInterval": 8
+              "minutesInterval": 15
             }
           ]
         }
@@ -17,7 +17,7 @@
         -688,
         -48
       ],
-      "id": "7e47c1a4-5fa6-439a-8e01-f68f4dae642f",
+      "id": "879f1132-e4cc-490e-a5d4-2b93b1357eb7",
       "name": "Schedule Trigger"
     },
     {
@@ -28,10 +28,10 @@
       "type": "n8n-nodes-base.httpRequest",
       "typeVersion": 4.4,
       "position": [
-        352,
+        848,
         -48
       ],
-      "id": "51d44e8e-a018-45aa-b15d-b90c4846abc9",
+      "id": "44da2c0c-d849-4f69-9d15-34bfca8d2255",
       "name": "GET HTML",
       "alwaysOutputData": false,
       "onError": "continueErrorOutput"
@@ -76,10 +76,10 @@
       "type": "n8n-nodes-base.html",
       "typeVersion": 1.2,
       "position": [
-        592,
+        1088,
         -48
       ],
-      "id": "572135ad-cc50-4292-b957-521db4e7a727",
+      "id": "314b5c43-beff-44d6-bf9c-e4ea6547f8e2",
       "name": "Extract Fields"
     },
     {
@@ -205,10 +205,10 @@
       "type": "n8n-nodes-base.postgres",
       "typeVersion": 2.6,
       "position": [
-        1248,
+        1744,
         -48
       ],
-      "id": "96ee214f-c9b9-4b0f-8f37-69a6640a79c0",
+      "id": "f5f3a8df-effd-4ae7-a392-29dadbfc15c8",
       "name": "Insert rows in a table",
       "credentials": {
         "postgres": {
@@ -277,10 +277,10 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        1056,
+        1552,
         -48
       ],
-      "id": "cd35fcf2-a191-4d72-8f55-ae9ca143ec46",
+      "id": "c6891dcc-113e-49e7-bba4-b292a1bd1d28",
       "name": "Edit Fields"
     },
     {
@@ -290,7 +290,7 @@
             {
               "id": "d4f056bf-240b-41d1-8259-e25ab06b66dd",
               "name": "jobId",
-              "value": "={{ $json.value }}",
+              "value": "={{ $json.job_id }}",
               "type": "string"
             }
           ]
@@ -300,51 +300,11 @@
       "type": "n8n-nodes-base.set",
       "typeVersion": 3.4,
       "position": [
-        144,
+        640,
         -48
       ],
-      "id": "3186d992-2cdc-4378-95ca-a5e93a5baeb1",
+      "id": "ecb41fb5-a9e3-4768-939e-0c60723b11e0",
       "name": "Config"
-    },
-    {
-      "parameters": {
-        "operation": "select",
-        "schema": {
-          "__rl": true,
-          "mode": "list",
-          "value": "public"
-        },
-        "table": {
-          "__rl": true,
-          "value": "job_postings",
-          "mode": "list",
-          "cachedResultName": "job_postings"
-        },
-        "limit": 1,
-        "sort": {
-          "values": [
-            {
-              "column": "job_id",
-              "direction": "DESC"
-            }
-          ]
-        },
-        "options": {}
-      },
-      "type": "n8n-nodes-base.postgres",
-      "typeVersion": 2.6,
-      "position": [
-        -480,
-        -48
-      ],
-      "id": "17df1188-c2af-4e26-b803-202213934fd3",
-      "name": "GET last processed job_id",
-      "credentials": {
-        "postgres": {
-          "id": "ZzBIvq2za0U7odoL",
-          "name": "job_alert_client"
-        }
-      }
     },
     {
       "parameters": {
@@ -353,25 +313,25 @@
       "type": "n8n-nodes-base.splitInBatches",
       "typeVersion": 3,
       "position": [
-        -80,
+        416,
         -48
       ],
-      "id": "c9e89056-0a9e-4719-8142-c69897242819",
+      "id": "607b7529-69d9-4ae6-9f92-fe47e5eec5c5",
       "name": "Loop Over Items"
     },
     {
       "parameters": {
-        "amount": 10
+        "amount": 20
       },
       "type": "n8n-nodes-base.wait",
       "typeVersion": 1.1,
       "position": [
-        1456,
+        1952,
         -48
       ],
-      "id": "8f00403b-2ec9-47a6-97af-877e046997a5",
+      "id": "6ab8c1ad-bb9b-417d-b25e-87d5216ab4f8",
       "name": "Wait",
-      "webhookId": "697d685e-05a7-4ffd-b4a0-8500d0785fae"
+      "webhookId": "598ec5e7-f228-4845-afd9-5d9885b77467"
     },
     {
       "parameters": {
@@ -434,72 +394,93 @@
       "type": "n8n-nodes-base.if",
       "typeVersion": 2.3,
       "position": [
-        800,
+        1296,
         -48
       ],
-      "id": "bc791480-84a3-4fd0-be2c-f97ecc81ec5f",
+      "id": "f7a2d72a-cb28-4e08-b12d-9de03558d7f1",
       "name": "Has valid job_id"
     },
     {
       "parameters": {
-        "jsCode": "// Get the input value of n from the incoming data\nconst n = parseInt($input.first().json.job_id, 10);\n\n// Generate items for n+1 through n+5\nconst results = [];\nfor (let i = 1; i <= 5; i++) {\n  results.push({ json: { value: n + i } });\n}\n\nreturn results;"
+        "jsCode": "// Get HTML string from previous node\nconst html = $input.first().json.data;\n\n// Regex to capture job IDs after /jobseekers/job/\nconst regex = /\\/jobseekers\\/job\\/(\\d+)/g;\n\nlet match;\nconst results = [];\n\nwhile ((match = regex.exec(html)) !== null) {\n  results.push({\n    job_id: match[1]\n  });\n}\n\n// Remove duplicates (optional)\nconst uniqueResults = [...new Map(results.map(item => [item.job_id, item])).values()];\n\nreturn uniqueResults;"
       },
       "type": "n8n-nodes-base.code",
       "typeVersion": 2,
       "position": [
-        -272,
+        -288,
         -48
       ],
-      "id": "0f8985e9-0beb-4464-8f9f-e0a1a57ffd87",
-      "name": "Generate next 5 job_ids"
+      "id": "4a7d9e4f-0084-4e99-b405-a77480f8d882",
+      "name": "Code in JavaScript"
     },
     {
       "parameters": {
-        "content": "## Increment job_id parameter",
-        "height": 352,
-        "width": 592,
-        "color": 4
+        "url": "=https://www.onlinejobs.ph/jobseekers/jobsearch?jobkeyword=&skill_tags=&gig=on&partTime=on&fullTime=on",
+        "options": {}
       },
-      "type": "n8n-nodes-base.stickyNote",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
       "position": [
-        -720,
-        -160
+        -496,
+        -48
       ],
-      "id": "6a62e13f-14bf-4f5b-b497-c9b056c956a4",
-      "name": "Sticky Note"
+      "id": "5527f31d-0e2f-48c6-bd5d-b8dae82281a0",
+      "name": "GET most recently updated job posts",
+      "alwaysOutputData": false,
+      "onError": "continueErrorOutput"
     },
     {
       "parameters": {
-        "content": "## Scrape and extract job details",
-        "height": 352,
-        "width": 592,
-        "color": 4
+        "compare": "={{ $json.job_id }}",
+        "options": {}
       },
-      "type": "n8n-nodes-base.stickyNote",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.removeDuplicates",
+      "typeVersion": 2,
       "position": [
-        128,
-        -160
+        -80,
+        -48
       ],
-      "id": "2a234643-c601-41d5-8b8e-1854e2396e29",
-      "name": "Sticky Note1"
+      "id": "5144276f-2b3d-4c61-b403-c2c34a8bdf29",
+      "name": "Remove Duplicates"
     },
     {
       "parameters": {
-        "content": "## Insert to Postgresdb",
-        "height": 352,
-        "width": 592,
-        "color": 4
+        "operation": "executeQuery",
+        "query": "SELECT job_id\nFROM job_postings;",
+        "options": {}
       },
-      "type": "n8n-nodes-base.stickyNote",
-      "typeVersion": 1,
+      "type": "n8n-nodes-base.postgres",
+      "typeVersion": 2.6,
       "position": [
-        1008,
-        -160
+        -80,
+        144
       ],
-      "id": "4b6bb303-e713-455b-86f9-70e4750de07b",
-      "name": "Sticky Note2"
+      "id": "a7915bd7-aed3-48a6-b7f4-e4671a9979a1",
+      "name": "Execute a SQL query",
+      "executeOnce": true,
+      "credentials": {
+        "postgres": {
+          "id": "ZzBIvq2za0U7odoL",
+          "name": "job_alert_client"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "mode": "combine",
+        "fieldsToMatchString": "job_id",
+        "joinMode": "keepNonMatches",
+        "outputDataFrom": "input1",
+        "options": {}
+      },
+      "type": "n8n-nodes-base.merge",
+      "typeVersion": 3.2,
+      "position": [
+        192,
+        -48
+      ],
+      "id": "82aa1fd6-3615-4c51-af3a-6aebe10738c6",
+      "name": "Merge"
     }
   ],
   "connections": {
@@ -507,7 +488,7 @@
       "main": [
         [
           {
-            "node": "GET last processed job_id",
+            "node": "GET most recently updated job posts",
             "type": "main",
             "index": 0
           }
@@ -576,17 +557,6 @@
         ]
       ]
     },
-    "GET last processed job_id": {
-      "main": [
-        [
-          {
-            "node": "Generate next 5 job_ids",
-            "type": "main",
-            "index": 0
-          }
-        ]
-      ]
-    },
     "Loop Over Items": {
       "main": [
         [],
@@ -628,7 +598,56 @@
         ]
       ]
     },
-    "Generate next 5 job_ids": {
+    "Code in JavaScript": {
+      "main": [
+        [
+          {
+            "node": "Remove Duplicates",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Execute a SQL query",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "GET most recently updated job posts": {
+      "main": [
+        [
+          {
+            "node": "Code in JavaScript",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Remove Duplicates": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Execute a SQL query": {
+      "main": [
+        [
+          {
+            "node": "Merge",
+            "type": "main",
+            "index": 1
+          }
+        ]
+      ]
+    },
+    "Merge": {
       "main": [
         [
           {
