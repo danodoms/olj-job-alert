@@ -81,6 +81,7 @@ export async function runScraper(): Promise<void> {
           .insert(jobPostings)
           .values(job)
           .onConflictDoNothing({ target: jobPostings.jobId });
+      }
     } catch (err) {
       console.error(`[scraper] job ${jobId} failed:`, err);
     }

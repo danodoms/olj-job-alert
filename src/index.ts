@@ -3,7 +3,7 @@ import { startBot } from './bot';
 import { startNotifier } from './notifier';
 import { startScraper } from './scraper';
 
-function main(): void {
+async function main(): Promise<void> {
   startBot();
   startScraper();
   startNotifier();
