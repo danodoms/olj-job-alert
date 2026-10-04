@@ -5,3 +5,7 @@ node_modules/
 dist/
 .env
 .DS_Store
+n8n_data/
+n8n_db.sqlite
+n8n_db.sqlite-shm
+n8n_db.sqlite-wal
