@@ -3,8 +3,10 @@ import { startBot } from './bot';
 import { startNotifier } from './notifier';
 import { startScraper } from './scraper';
 import { startStatus } from './status';
+import { migrate } from './db';
 
 async function main(): Promise<void> {
+  await migrate();
   startBot();
   startScraper();
   startNotifier();

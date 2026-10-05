@@ -2,6 +2,7 @@ import http from 'http';
 import { db } from './db';
 import { jobPostings, userSubscriptions } from './schema';
 import { sql } from 'drizzle-orm';
+import { formatPay, type ParsedPay } from './pay';
 
 const STATUS_PORT = Number(process.env.STATUS_PORT) || 3000;
 const STATUS_ENABLED = process.env.STATUS_ENABLED !== 'false';
@@ -113,6 +114,8 @@ const SORT_COLUMNS: Record<string, string> = {
   jobId: 'job_id',
   jobTitle: 'job_title',
   compensation: 'compensation',
+  pay: 'pay_usd_month',
+  payHour: 'pay_usd_hour',
 };
 
 function clampInt(raw: string | null, def: number, min: number, max: number): number {
@@ -126,6 +129,7 @@ async function listJobs(params: URLSearchParams) {
   const pageSize = clampInt(params.get('pageSize'), 20, 5, 100);
   const q = (params.get('q') ?? '').trim().slice(0, 200);
   const type = (params.get('type') ?? '').trim().slice(0, 100);
+  const minPay = Number(params.get('minPay'));
   const sortKey = params.get('sort') ?? 'createdAt';
   const sortCol = SORT_COLUMNS[sortKey] ?? SORT_COLUMNS.createdAt;
   const dir = params.get('dir') === 'asc' ? 'ASC' : 'DESC';
@@ -140,6 +144,9 @@ async function listJobs(params: URLSearchParams) {
   if (type) {
     conditions.push(sql`${jobPostings.typeOfWork} = ${type}`);
   }
+  if (Number.isFinite(minPay) && minPay > 0) {
+    conditions.push(sql`${jobPostings.payUsdMonth} >= ${minPay}`);
+  }
   const whereClause = conditions.length
     ? sql`WHERE ${sql.join(conditions, sql` AND `)}`
     : sql``;
@@ -150,7 +157,9 @@ async function listJobs(params: URLSearchParams) {
     db.execute(sql`SELECT COUNT(*)::int AS total FROM job_postings ${whereClause}`),
     db.execute(sql`
       SELECT job_id, job_title, type_of_work, compensation, hours_per_week,
-             job_date, is_processed, created_at
+             job_date, is_processed, created_at,
+             pay_min, pay_max, pay_currency, pay_period, pay_unit_label,
+             pay_usd_hour, pay_usd_month, pay_confidence
       FROM job_postings
       ${whereClause}
       ORDER BY ${sql.raw(sortCol)} ${sql.raw(dir)} NULLS LAST, job_id DESC
@@ -183,6 +192,18 @@ async function listJobs(params: URLSearchParams) {
       jobDate: r.job_date ? String(r.job_date).slice(0, 10) : null,
       isProcessed: r.is_processed,
       createdAt: toIso(r.created_at),
+      payText: formatPay({
+        payMin: (r.pay_min as number) ?? null,
+        payMax: (r.pay_max as number) ?? null,
+        payCurrency: (r.pay_currency as string) ?? null,
+        payPeriod: ((r.pay_period as string) ?? 'unknown') as ParsedPay['payPeriod'],
+        payUnitLabel: (r.pay_unit_label as string) ?? null,
+        payUsdHour: (r.pay_usd_hour as number) ?? null,
+        payUsdMonth: (r.pay_usd_month as number) ?? null,
+        payConfidence: ((r.pay_confidence as string) ?? 'none') as ParsedPay['payConfidence'],
+      }),
+      payUsdMonth: (r.pay_usd_month as number) ?? null,
+      payConfidence: (r.pay_confidence as string) ?? 'none',
     })),
   };
 }
@@ -206,6 +227,18 @@ async function getJob(jobId: number) {
     jobDate: job.jobDate,
     isProcessed: job.isProcessed,
     createdAt: toIso(job.createdAt),
+    payText: formatPay({
+      payMin: job.payMin,
+      payMax: job.payMax,
+      payCurrency: job.payCurrency,
+      payPeriod: (job.payPeriod ?? 'unknown') as ParsedPay['payPeriod'],
+      payUnitLabel: job.payUnitLabel,
+      payUsdHour: job.payUsdHour,
+      payUsdMonth: job.payUsdMonth,
+      payConfidence: (job.payConfidence ?? 'none') as ParsedPay['payConfidence'],
+    }),
+    payUsdMonth: job.payUsdMonth,
+    payConfidence: job.payConfidence,
   };
 }
 
@@ -687,6 +720,7 @@ const JOBS_PAGE = `<!DOCTYPE html>
   .mono { font-variant-numeric: tabular-nums; color: var(--muted); font-size: 12.5px; }
   .tag { display: inline-block; padding: 3px 9px; border-radius: 7px; font-size: 11.5px; font-weight: 600; background: rgba(79,140,255,0.14); color: #9ec1ff; white-space: nowrap; }
   .pill-ok { color: var(--ok); } .pill-pending { color: var(--warn); }
+  .conf-low { color: var(--warn); cursor: help; }
   .empty { padding: 60px 20px; text-align: center; color: var(--muted-dim); }
 
   .pager { display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 12px; margin-top: 16px; }
@@ -761,11 +795,16 @@ const JOBS_PAGE = `<!DOCTYPE html>
       <option value="createdAt:asc">Oldest scraped</option>
       <option value="jobDate:desc">Posting date ↓</option>
       <option value="jobDate:asc">Posting date ↑</option>
+      <option value="pay:desc">Pay (monthly) ↓</option>
+      <option value="pay:asc">Pay (monthly) ↑</option>
+      <option value="payHour:desc">Pay (hourly) ↓</option>
       <option value="jobId:desc">Job ID ↓</option>
       <option value="jobId:asc">Job ID ↑</option>
       <option value="jobTitle:asc">Title A–Z</option>
       <option value="jobTitle:desc">Title Z–A</option>
     </select>
+    <input id="minPay" type="number" min="0" step="50" placeholder="Min $/mo"
+      style="width:120px;padding:11px 14px;border-radius:11px;background:rgba(0,0,0,0.28);border:1px solid rgba(255,255,255,0.13);color:var(--text);font-size:13.5px;outline:none">
     <select id="pageSize">
       <option value="20">20 / page</option>
       <option value="50">50 / page</option>
@@ -780,7 +819,7 @@ const JOBS_PAGE = `<!DOCTYPE html>
           <th class="sortable" data-sort="jobTitle">Title</th>
           <th class="sortable hide-sm" data-sort="jobId">ID</th>
           <th class="hide-sm">Type</th>
-          <th class="hide-sm">Pay</th>
+          <th class="sortable hide-sm" data-sort="pay">Pay</th>
           <th class="sortable hide-sm" data-sort="jobDate">Posted</th>
           <th class="sortable" data-sort="createdAt">Scraped</th>
         </tr>
@@ -807,7 +846,7 @@ const JOBS_PAGE = `<!DOCTYPE html>
 </aside>
 
 <script>
-  var state = { page: 1, pageSize: 20, q: '', type: '', sort: 'createdAt', dir: 'desc' };
+  var state = { page: 1, pageSize: 20, q: '', type: '', sort: 'createdAt', dir: 'desc', minPay: '' };
   var qTimer = null;
 
   function esc(s) { return String(s == null ? '' : s).replace(/[&<>"]/g, function (c) { return { '&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;' }[c]; }); }
@@ -827,6 +866,7 @@ const JOBS_PAGE = `<!DOCTYPE html>
     p.set('page', state.page); p.set('pageSize', state.pageSize);
     if (state.q) p.set('q', state.q);
     if (state.type) p.set('type', state.type);
+    if (state.minPay) p.set('minPay', state.minPay);
     p.set('sort', state.sort); p.set('dir', state.dir);
     return p.toString();
   }
@@ -839,7 +879,8 @@ const JOBS_PAGE = `<!DOCTYPE html>
         '<td class="jt">' + esc(j.title || ('Job #' + j.jobId)) + '</td>' +
         '<td class="mono hide-sm">' + j.jobId + '</td>' +
         '<td class="hide-sm">' + (j.typeOfWork ? '<span class="tag">' + esc(j.typeOfWork) + '</span>' : '—') + '</td>' +
-        '<td class="hide-sm">' + esc(j.compensation || '—') + '</td>' +
+        '<td class="hide-sm" title="' + esc(j.compensation || '') + '">' + esc(j.payText || '—') +
+          (j.payConfidence === 'low' ? ' <span class="conf-low" title="amount/currency unclear">≈</span>' : '') + '</td>' +
         '<td class="mono hide-sm">' + esc(j.jobDate || '—') + '</td>' +
         '<td class="mono" title="' + esc(human(j.createdAt)) + '">' + esc(relative(j.createdAt)) + '</td>' +
       '</tr>';
@@ -904,7 +945,8 @@ const JOBS_PAGE = `<!DOCTYPE html>
       meta += '<div class="meta-item"><div class="k">Job ID</div><div class="v">' + j.jobId + '</div></div>';
       meta += '<div class="meta-item"><div class="k">Status</div><div class="v ' + (j.isProcessed ? 'pill-ok' : 'pill-pending') + '">' + (j.isProcessed ? 'Processed' : 'Pending') + '</div></div>';
       meta += '<div class="meta-item"><div class="k">Type</div><div class="v">' + esc(j.typeOfWork || '—') + '</div></div>';
-      meta += '<div class="meta-item"><div class="k">Pay</div><div class="v">' + esc(j.compensation || '—') + '</div></div>';
+      meta += '<div class="meta-item"><div class="k">Pay</div><div class="v">' + esc(j.payText || j.compensation || '—') +
+        (j.payConfidence === 'low' ? ' <span class="conf-low" title="amount/currency unclear">≈</span>' : '') + '</div></div>';
       meta += '<div class="meta-item"><div class="k">Hours / week</div><div class="v">' + esc(j.hoursPerWeek || '—') + '</div></div>';
       meta += '<div class="meta-item"><div class="k">Posted</div><div class="v">' + esc(longDate(j.jobDate)) + '</div></div>';
       var body = '<div class="meta-grid">' + meta + '</div>';
@@ -931,6 +973,11 @@ const JOBS_PAGE = `<!DOCTYPE html>
     qTimer = setTimeout(function () { state.q = v; state.page = 1; load(); }, 300);
   });
   document.getElementById('type').addEventListener('change', function (e) { state.type = e.target.value; state.page = 1; load(); });
+  document.getElementById('minPay').addEventListener('input', function (e) {
+    clearTimeout(qTimer);
+    var v = e.target.value;
+    qTimer = setTimeout(function () { state.minPay = v; state.page = 1; load(); }, 350);
+  });
   document.getElementById('pageSize').addEventListener('change', function (e) { state.pageSize = parseInt(e.target.value, 10); state.page = 1; load(); });
   document.getElementById('sort').addEventListener('change', function (e) {
     var parts = e.target.value.split(':'); state.sort = parts[0]; state.dir = parts[1]; state.page = 1; load();

@@ -3,6 +3,7 @@ import { sql } from 'drizzle-orm';
 import { db } from './db';
 import { jobPostings } from './schema';
 import { delay } from './utils';
+import { parsePay } from './pay';
 
 const SYNC_INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS ?? 120000);
 const SYNC_BATCH = Number(process.env.SYNC_BATCH ?? 5);
@@ -24,6 +25,14 @@ type ScrapedJob = {
   compensation: string;
   hoursPerWeek: string;
   jobDate: string;
+  payMin: number | null;
+  payMax: number | null;
+  payCurrency: string | null;
+  payPeriod: string;
+  payUnitLabel: string | null;
+  payUsdHour: number | null;
+  payUsdMonth: number | null;
+  payConfidence: string;
 };
 
 /**
@@ -168,6 +177,21 @@ async function fetchJob(jobId: number): Promise<ScrapedJob | null> {
     compensation,
     hoursPerWeek,
     jobDate,
+    ...payColumns(compensation, hoursPerWeek),
+  };
+}
+
+function payColumns(compensation: string, hoursPerWeek: string) {
+  const p = parsePay(compensation, hoursPerWeek);
+  return {
+    payMin: p.payMin,
+    payMax: p.payMax,
+    payCurrency: p.payCurrency,
+    payPeriod: p.payPeriod,
+    payUnitLabel: p.payUnitLabel,
+    payUsdHour: p.payUsdHour,
+    payUsdMonth: p.payUsdMonth,
+    payConfidence: p.payConfidence,
   };
 }
 
