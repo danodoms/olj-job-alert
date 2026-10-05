@@ -58,3 +58,18 @@ export const userSubscriptions = pgTable(
     ),
   }),
 );
+
+/** Log of alerts actually sent. Powers /mysubs insights and observability. */
+export const notifications = pgTable(
+  'notifications',
+  {
+    id: serial('id').primaryKey(),
+    chatId: bigint('chat_id', { mode: 'number' }).notNull(),
+    jobId: bigint('job_id', { mode: 'number' }).notNull(),
+    sentAt: timestamp('sent_at', { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    chatIdx: index('idx_notifications_chat_id').on(table.chatId),
+    chatSentIdx: index('idx_notifications_chat_sent').on(table.chatId, table.sentAt),
+  }),
+);

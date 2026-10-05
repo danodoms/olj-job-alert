@@ -22,6 +22,14 @@ ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS pay_usd_month real;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS pay_confidence text;
 CREATE INDEX IF NOT EXISTS idx_job_postings_pay_usd_month ON job_postings(pay_usd_month);
 CREATE INDEX IF NOT EXISTS idx_job_postings_is_processed ON job_postings(is_processed);
+CREATE TABLE IF NOT EXISTS notifications (
+  id serial PRIMARY KEY,
+  chat_id bigint NOT NULL,
+  job_id bigint NOT NULL,
+  sent_at timestamptz DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS idx_notifications_chat_id ON notifications(chat_id);
+CREATE INDEX IF NOT EXISTS idx_notifications_chat_sent ON notifications(chat_id, sent_at);
 `;
 
 export async function migrate(): Promise<void> {

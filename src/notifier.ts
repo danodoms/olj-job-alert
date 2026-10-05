@@ -1,8 +1,9 @@
-import { eq, inArray, sql } from 'drizzle-orm';
+import { eq, sql } from 'drizzle-orm';
 import { db } from './db';
 import { jobPostings } from './schema';
 import { userSubscriptions } from './schema';
-import { matchKeywords } from './match';
+import { notifications } from './schema';
+import { matchJob, describeMatches, type KeywordMatch } from './match';
 import { delay, escapeHtml } from './utils';
 import { bot } from './bot';
 import { formatPay, formatVerdict, verdictFromPool, type ParsedPay, type PayVerdict } from './pay';
@@ -64,6 +65,7 @@ async function payInsightFor(job: typeof jobPostings.$inferSelect): Promise<PayI
 function buildMessage(
   job: typeof jobPostings.$inferSelect,
   insight: PayInsight | null,
+  matches: KeywordMatch[],
 ): string {
   const description = (job.jobDescription ?? '').slice(0, DESCRIPTION_LIMIT);
   const parsed: ParsedPay = {
@@ -80,12 +82,15 @@ function buildMessage(
   const isHigh = insight?.verdict === 'high';
   const verdictText = insight && !isHigh ? formatVerdict(insight.verdict) : null;
 
+  const onlyPossible = matches.length > 0 && matches.every((m) => m.strength === 'possible');
+  const headline = onlyPossible ? '🔎 <b>Possible match</b>' : '🔔 <b>New job match!</b>';
+
   const lines: string[] = [];
   if (isHigh) {
     lines.push('🔥 <b>HIGH PAY</b>', '');
   }
   lines.push(
-    '🔔 <b>New job match!</b>',
+    headline,
     '',
     `<b>${escapeHtml(job.jobTitle ?? '')}</b>`,
     '',
@@ -96,6 +101,9 @@ function buildMessage(
   );
   if (verdictText) {
     lines.push(`📊 <b>Market:</b> ${escapeHtml(verdictText)} · vs ${escapeHtml(insight!.peerLabel)}`);
+  }
+  if (matches.length > 0) {
+    lines.push(`🎯 <b>Matched:</b> ${escapeHtml(describeMatches(matches))}`);
   }
   lines.push(
     `⏰ <b>Hours:</b> ${escapeHtml(job.hoursPerWeek ?? '')}`,
@@ -115,36 +123,46 @@ export async function runNotifier(): Promise<void> {
 
   if (jobs.length === 0) return;
 
-  const keywordRows = await db
-    .selectDistinct({ keyword: userSubscriptions.keyword })
+  const subRows = await db
+    .select({ chatId: userSubscriptions.chatId, keyword: userSubscriptions.keyword })
     .from(userSubscriptions);
-  const keywords = keywordRows.map((r) => r.keyword);
+
+  // Group keywords by subscriber so each gets only their own match reason.
+  const byChat = new Map<number, string[]>();
+  for (const { chatId, keyword } of subRows) {
+    const list = byChat.get(chatId);
+    if (list) list.push(keyword);
+    else byChat.set(chatId, [keyword]);
+  }
 
   let sent = 0;
   let matched = 0;
 
   for (const job of jobs) {
-    const haystack = `${job.jobTitle ?? ''} ${job.jobDescription ?? ''}`;
-    const jobMatches = matchKeywords(haystack, keywords);
+    const title = job.jobTitle ?? '';
+    const description = job.jobDescription ?? '';
+    let insight: PayInsight | null = null;
+    let matchedThisJob = false;
 
-    if (jobMatches.length > 0) {
-      matched++;
-      const subscribers = await db
-        .selectDistinct({ chatId: userSubscriptions.chatId })
-        .from(userSubscriptions)
-        .where(inArray(userSubscriptions.keyword, jobMatches));
+    for (const [chatId, keywords] of byChat) {
+      const matches = matchJob(title, description, keywords);
+      if (matches.length === 0) continue;
 
-      const message = buildMessage(job, await payInsightFor(job));
-      for (const { chatId } of subscribers) {
-        try {
-          await bot.api.sendMessage(chatId, message, { parse_mode: 'HTML' });
-          sent++;
-        } catch (err) {
-          console.error(`[notifier] send to ${chatId} failed:`, err);
-        }
-        await delay(250);
+      matchedThisJob = true;
+      if (insight === null) insight = await payInsightFor(job);
+      const message = buildMessage(job, insight, matches);
+
+      try {
+        await bot.api.sendMessage(chatId, message, { parse_mode: 'HTML' });
+        await db.insert(notifications).values({ chatId, jobId: job.jobId });
+        sent++;
+      } catch (err) {
+        console.error(`[notifier] send to ${chatId} failed:`, err);
       }
+      await delay(250);
     }
+
+    if (matchedThisJob) matched++;
 
     await db
       .update(jobPostings)
