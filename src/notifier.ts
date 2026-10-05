@@ -7,6 +7,7 @@ import { delay, escapeHtml } from './utils';
 import { bot } from './bot';
 
 const NOTIFIER_INTERVAL_MS = Number(process.env.NOTIFIER_INTERVAL_MS ?? 20000);
+const NOTIFIER_BATCH = Number(process.env.NOTIFIER_BATCH ?? 20);
 const DESCRIPTION_LIMIT = 120;
 
 function buildMessage(job: typeof jobPostings.$inferSelect): string {
@@ -27,44 +28,53 @@ function buildMessage(job: typeof jobPostings.$inferSelect): string {
 }
 
 export async function runNotifier(): Promise<void> {
-  const [job] = await db
+  const jobs = await db
     .select()
     .from(jobPostings)
     .where(eq(jobPostings.isProcessed, false))
-    .orderBy(jobPostings.jobId)
-    .limit(1);
+    .orderBy(sql`${jobPostings.jobId} DESC`)
+    .limit(NOTIFIER_BATCH);
 
-  if (!job) return;
+  if (jobs.length === 0) return;
 
   const keywordRows = await db
     .selectDistinct({ keyword: userSubscriptions.keyword })
     .from(userSubscriptions);
   const keywords = keywordRows.map((r) => r.keyword);
 
-  const haystack = `${job.jobTitle ?? ''} ${job.jobDescription ?? ''}`;
-  const matched = matchKeywords(haystack, keywords);
+  let sent = 0;
+  let matched = 0;
 
-  if (matched.length > 0) {
-    const subscribers = await db
-      .selectDistinct({ chatId: userSubscriptions.chatId })
-      .from(userSubscriptions)
-      .where(inArray(userSubscriptions.keyword, matched));
+  for (const job of jobs) {
+    const haystack = `${job.jobTitle ?? ''} ${job.jobDescription ?? ''}`;
+    const jobMatches = matchKeywords(haystack, keywords);
 
-    const message = buildMessage(job);
-    for (const { chatId } of subscribers) {
-      try {
-        await bot.api.sendMessage(chatId, message, { parse_mode: 'HTML' });
-      } catch (err) {
-        console.error(`[notifier] send to ${chatId} failed:`, err);
+    if (jobMatches.length > 0) {
+      matched++;
+      const subscribers = await db
+        .selectDistinct({ chatId: userSubscriptions.chatId })
+        .from(userSubscriptions)
+        .where(inArray(userSubscriptions.keyword, jobMatches));
+
+      const message = buildMessage(job);
+      for (const { chatId } of subscribers) {
+        try {
+          await bot.api.sendMessage(chatId, message, { parse_mode: 'HTML' });
+          sent++;
+        } catch (err) {
+          console.error(`[notifier] send to ${chatId} failed:`, err);
+        }
+        await delay(250);
       }
-      await delay(250);
     }
+
+    await db
+      .update(jobPostings)
+      .set({ isProcessed: true })
+      .where(eq(jobPostings.id, job.id));
   }
 
-  await db
-    .update(jobPostings)
-    .set({ isProcessed: true })
-    .where(eq(jobPostings.id, job.id));
+  console.log(`[notifier] processed ${jobs.length}, matched ${matched}, sent ${sent}`);
 }
 
 export function startNotifier(): void {
