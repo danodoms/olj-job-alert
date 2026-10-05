@@ -8,8 +8,11 @@ services:
       SYNC_INTERVAL_MS: 120000
       SYNC_BATCH: 5
       NOTIFIER_INTERVAL_MS: 20000
+      STATUS_PORT: 3000
     env_file:
       - .env
+    ports:
+      - "127.0.0.1:3000:3000"
     depends_on:
       postgres:
         condition: service_healthy
