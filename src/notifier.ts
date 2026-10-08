@@ -6,7 +6,7 @@ import { notifications } from './schema';
 import { matchJob, describeMatches, type KeywordMatch } from './match';
 import { delay, escapeHtml } from './utils';
 import { bot } from './bot';
-import { formatPay, formatVerdict, verdictFromPool, type ParsedPay, type PayVerdict } from './pay';
+import { formatPay, formatVerdict, verdictEmoji, verdictFromPool, type ParsedPay, type PayVerdict } from './pay';
 
 const NOTIFIER_INTERVAL_MS = Number(process.env.NOTIFIER_INTERVAL_MS ?? 20000);
 const NOTIFIER_BATCH = Number(process.env.NOTIFIER_BATCH ?? 20);
@@ -79,16 +79,12 @@ function buildMessage(
     payConfidence: (job.payConfidence ?? 'none') as ParsedPay['payConfidence'],
   };
   const payText = formatPay(parsed);
-  const isHigh = insight?.verdict === 'high';
-  const verdictText = insight && !isHigh ? formatVerdict(insight.verdict) : null;
+  const verdictText = insight ? formatVerdict(insight.verdict) : null;
 
   const onlyPossible = matches.length > 0 && matches.every((m) => m.strength === 'possible');
   const headline = onlyPossible ? '🔎 <b>Possible match</b>' : '🔔 <b>New job match!</b>';
 
   const lines: string[] = [];
-  if (isHigh) {
-    lines.push('🔥 <b>HIGH PAY</b>', '');
-  }
   lines.push(
     headline,
     '',
@@ -100,7 +96,10 @@ function buildMessage(
     `💰 <b>Pay:</b> ${escapeHtml(payText)}`,
   );
   if (verdictText) {
-    lines.push(`📊 <b>Market:</b> ${escapeHtml(verdictText)} · vs ${escapeHtml(insight!.peerLabel)}`);
+    const emoji = verdictEmoji(insight!.verdict) ?? '';
+    lines.push(
+      `📊 <b>Market:</b> ${emoji} ${escapeHtml(verdictText)} · vs ${escapeHtml(insight!.peerLabel)}`,
+    );
   }
   if (matches.length > 0) {
     lines.push(`🎯 <b>Matched:</b> ${escapeHtml(describeMatches(matches))}`);

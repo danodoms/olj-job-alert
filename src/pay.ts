@@ -196,12 +196,24 @@ export function formatPay(p: ParsedPay): string {
 
 const VERDICT_TEXT: Record<PayVerdict, string> = {
   high: 'High pay',
-  fair: 'Fair pay',
+  fair: 'Average pay',
   low: 'Low pay',
+};
+
+/** Emoji shown before the market verdict, so every verdict reads at a glance. */
+const VERDICT_EMOJI: Record<PayVerdict, string> = {
+  high: '🔥',
+  fair: '✅',
+  low: '⚠️',
 };
 
 export function formatVerdict(v: PayVerdict | null): string | null {
   return v ? VERDICT_TEXT[v] : null;
+}
+
+/** Emoji for a verdict, or null when there is no verdict. */
+export function verdictEmoji(v: PayVerdict | null): string | null {
+  return v ? VERDICT_EMOJI[v] : null;
 }
 
 /**
