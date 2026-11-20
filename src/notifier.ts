@@ -43,6 +43,7 @@ export async function runNotifier(): Promise<void> {
 
   let sent = 0;
   let matched = 0;
+  let retried = 0;
 
   for (const job of jobs) {
     const title = job.jobTitle ?? '';
@@ -63,6 +64,7 @@ export async function runNotifier(): Promise<void> {
     }
 
     matched++;
+    let retryLater = false;
     const insight = await payInsightFor(job);
     const analysis = (job.aiAnalysis as JobAnalysis | null) ?? null;
 
@@ -76,14 +78,23 @@ export async function runNotifier(): Promise<void> {
       );
 
       try {
-        if (await sendAlert(chatId, caption, job, alertKeyboard(job.jobId, hasAi))) {
+        const result = await sendAlert(chatId, caption, job, alertKeyboard(job.jobId, hasAi));
+        if (result.ok) {
           await db.insert(notifications).values({ chatId, jobId: job.jobId });
           sent++;
+        } else if (result.retry) {
+          retryLater = true;
         }
       } catch (err) {
+        retryLater = true;
         console.error(`[notifier] send to ${chatId} failed:`, err);
       }
       await delay(250);
+    }
+
+    if (retryLater) {
+      retried++;
+      continue;
     }
 
     await db
@@ -92,7 +103,9 @@ export async function runNotifier(): Promise<void> {
       .where(eq(jobPostings.id, job.id));
   }
 
-  console.log(`[notifier] processed ${jobs.length}, matched ${matched}, sent ${sent}`);
+  console.log(
+    `[notifier] processed ${jobs.length}, matched ${matched}, sent ${sent}, retried ${retried}`,
+  );
 }
 
 let notifierRunning = false;

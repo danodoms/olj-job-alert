@@ -32,7 +32,7 @@ export type AlertJob = Pick<
   'jobId' | 'employer' | 'employerId' | 'employerLogo'
 >;
 
-type Failure = 'invalid_file' | 'bad_request' | 'parse' | 'network';
+type Failure = 'invalid_file' | 'bad_request' | 'parse' | 'network' | 'blocked';
 
 function describe(err: unknown): string {
   return err instanceof GrammyError ? err.description : String(err);
@@ -45,6 +45,7 @@ function failureOf(err: unknown): Failure {
       return 'invalid_file';
     }
     if (/parse entities|can't find end tag|unsupported start tag/.test(text)) return 'parse';
+    if (/blocked|deactivated|chat not found|kicked/.test(text)) return 'blocked';
     return err.error_code === 400 ? 'bad_request' : 'network';
   }
   return 'network';
@@ -188,18 +189,18 @@ async function sendText(
   chatId: number,
   caption: string,
   keyboard: InlineKeyboardMarkup,
-): Promise<boolean> {
+): Promise<Failure | null> {
   try {
     await (await telegramApi()).sendMessage(chatId, caption, {
       parse_mode: 'HTML',
       reply_markup: keyboard,
       link_preview_options: { is_disabled: true },
     });
-    return true;
+    return null;
   } catch (err) {
     if (failureOf(err) !== 'parse') {
       console.error(`[banner] sendMessage failed: ${describe(err)}`);
-      return false;
+      return failureOf(err);
     }
     console.warn(`[banner] entity parse failed, plain-text fallback: ${describe(err)}`);
     try {
@@ -207,37 +208,45 @@ async function sendText(
         reply_markup: keyboard,
         link_preview_options: { is_disabled: true },
       });
-      return true;
+      return null;
     } catch (plainErr) {
       console.error(`[banner] plain-text fallback failed: ${describe(plainErr)}`);
-      return false;
+      return failureOf(plainErr);
     }
   }
 }
 
 /**
  * Send one alert. Cached banner first, then render+upload, then text.
- * Returns true only when a message landed.
+ * `retry` is true only for a network failure: the alert is worth sending again.
  */
+export type AlertSend = { ok: boolean; retry: boolean };
+
+function outcome(failure: Failure | null): AlertSend {
+  return { ok: failure === null, retry: failure === 'network' };
+}
+
 export async function sendAlert(
   chatId: number,
   caption: string,
   job: AlertJob,
   keyboard: InlineKeyboardMarkup,
-): Promise<boolean> {
+): Promise<AlertSend> {
   const employerId = job.employerId;
   const logoUrl = job.employerLogo;
 
   if (!employerId || !logoUrl || visibleLength(caption) > CAPTION_LIMIT) {
-    return sendText(chatId, caption, keyboard);
+    return outcome(await sendText(chatId, caption, keyboard));
   }
 
   const cached = await cachedBanner(employerId, logoUrl);
   if (cached) {
     const result = await sendPhoto(chatId, cached, caption, keyboard);
-    if (result.ok) return true;
+    if (result.ok) return { ok: true, retry: false };
     if (result.failure !== 'invalid_file') {
-      return result.failure === 'bad_request' ? sendText(chatId, caption, keyboard) : false;
+      return result.failure === 'bad_request'
+        ? outcome(await sendText(chatId, caption, keyboard))
+        : outcome(result.failure);
     }
     await db
       .delete(employerBanners)
@@ -248,7 +257,7 @@ export async function sendAlert(
   const logo = await fetchLogo(logoUrl);
   if (!logo) {
     console.warn('[banner] logo fetch failed, text fallback');
-    return sendText(chatId, caption, keyboard);
+    return outcome(await sendText(chatId, caption, keyboard));
   }
 
   let banner: Buffer;
@@ -256,16 +265,16 @@ export async function sendAlert(
     banner = await renderBanner(logo, job.employer ?? '');
   } catch (err) {
     console.warn('[banner] render failed, text fallback:', err);
-    return sendText(chatId, caption, keyboard);
+    return outcome(await sendText(chatId, caption, keyboard));
   }
 
   const result = await sendPhoto(chatId, new InputFile(banner, 'banner.png'), caption, keyboard);
   if (result.ok) {
     await storeBanner(employerId, logoUrl, result.fileId);
-    return true;
+    return { ok: true, retry: false };
   }
-  if (result.failure === 'network') return false;
-  return sendText(chatId, caption, keyboard);
+  if (result.failure === 'network') return outcome('network');
+  return outcome(await sendText(chatId, caption, keyboard));
 }
 
 // ---------------------------------------------------------------------------
@@ -288,6 +297,17 @@ if (require.main === module) {
       logoOnlyMeta.height === 300;
     if (!ok) {
       console.error(`FAIL banner ${meta.width}x${meta.height} ${meta.format}`);
+      process.exit(1);
+    }
+    // A dropped alert is retried only on a network failure.
+    const sendChecks = [
+      outcome(null).ok && !outcome(null).retry,
+      !outcome('network').ok && outcome('network').retry,
+      !outcome('blocked').ok && !outcome('blocked').retry,
+      !outcome('bad_request').retry,
+    ];
+    if (sendChecks.includes(false)) {
+      console.error('FAIL banner send outcome mapping');
       process.exit(1);
     }
     console.log('banner.ts self-check OK (1200x300 PNG)');
