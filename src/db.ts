@@ -72,6 +72,9 @@ CREATE TABLE IF NOT EXISTS notifications (
 );
 CREATE INDEX IF NOT EXISTS idx_notifications_chat_id ON notifications(chat_id);
 CREATE INDEX IF NOT EXISTS idx_notifications_chat_sent ON notifications(chat_id, sent_at);
+DELETE FROM notifications a USING notifications b
+  WHERE a.chat_id = b.chat_id AND a.job_id = b.job_id AND a.id > b.id;
+CREATE UNIQUE INDEX IF NOT EXISTS notifications_chat_job_unique ON notifications(chat_id, job_id);
 `;
 
 export async function migrate(): Promise<void> {

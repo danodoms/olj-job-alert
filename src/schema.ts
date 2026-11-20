@@ -127,5 +127,6 @@ export const notifications = pgTable(
   (table) => ({
     chatIdx: index('idx_notifications_chat_id').on(table.chatId),
     chatSentIdx: index('idx_notifications_chat_sent').on(table.chatId, table.sentAt),
+    chatJobUniq: uniqueIndex('notifications_chat_job_unique').on(table.chatId, table.jobId),
   }),
 );

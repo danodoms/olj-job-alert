@@ -188,7 +188,7 @@ async function sendPhoto(
 async function sendText(
   chatId: number,
   caption: string,
-  keyboard: InlineKeyboardMarkup,
+  keyboard?: InlineKeyboardMarkup,
 ): Promise<Failure | null> {
   try {
     await (await telegramApi()).sendMessage(chatId, caption, {
@@ -216,15 +216,20 @@ async function sendText(
   }
 }
 
+/** Plain status message, no alert keyboard. True when it landed. */
+export async function sendNotice(chatId: number, text: string): Promise<boolean> {
+  return (await sendText(chatId, text)) === null;
+}
+
+function outcome(failure: Failure | null): AlertSend {
+  return { ok: failure === null, retry: failure === 'network' };
+}
+
 /**
  * Send one alert. Cached banner first, then render+upload, then text.
  * `retry` is true only for a network failure: the alert is worth sending again.
  */
 export type AlertSend = { ok: boolean; retry: boolean };
-
-function outcome(failure: Failure | null): AlertSend {
-  return { ok: failure === null, retry: failure === 'network' };
-}
 
 export async function sendAlert(
   chatId: number,
