@@ -216,6 +216,15 @@ export function verdictEmoji(v: PayVerdict | null): string | null {
   return v ? VERDICT_EMOJI[v] : null;
 }
 
+/** Quantile of a pre-sorted ascending array (linear interpolation). */
+export function quantile(sorted: number[], p: number): number {
+  const idx = (sorted.length - 1) * p;
+  const lo = Math.floor(idx);
+  const hi = Math.ceil(idx);
+  if (lo === hi) return sorted[lo];
+  return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
+}
+
 /**
  * Compare a value against a peer distribution.
  * `pool` must be pre-sorted ascending. Returns null when there is too little data.
@@ -227,18 +236,39 @@ export function verdictFromPool(
 ): PayVerdict | null {
   if (value === null || pool.length < sampleFloor) return null;
   const sorted = pool;
-  const q = (p: number) => {
-    const idx = (sorted.length - 1) * p;
-    const lo = Math.floor(idx);
-    const hi = Math.ceil(idx);
-    if (lo === hi) return sorted[lo];
-    return sorted[lo] + (sorted[hi] - sorted[lo]) * (idx - lo);
-  };
-  const p35 = q(0.35);
-  const p65 = q(0.65);
+  const p35 = quantile(sorted, 0.35);
+  const p65 = quantile(sorted, 0.65);
   if (value > p65) return 'high';
   if (value < p35) return 'low';
   return 'fair';
+}
+
+export type PayOutlier = {
+  extreme: boolean;
+  median: number;
+  p95: number;
+  ratio: number;
+};
+
+/**
+ * Pay far above the peer market, measured deterministically.
+ * `pool` must be pre-sorted ascending. Null when there are too few peers.
+ */
+export function payOutlierFromPool(
+  value: number | null,
+  pool: number[],
+  sampleFloor = 15,
+): PayOutlier | null {
+  if (value === null || pool.length < sampleFloor) return null;
+  const median = quantile(pool, 0.5);
+  const p95 = quantile(pool, 0.95);
+  if (median <= 0) return null;
+  return {
+    extreme: value > p95 && value >= 2 * median,
+    median: round2(median),
+    p95: round2(p95),
+    ratio: round2(value / median),
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -285,6 +315,23 @@ if (require.main === module) {
   if (high !== 'high' || low !== 'low' || fair !== 'fair' || tooFew !== null) {
     failed++;
     console.error(`FAIL verdicts: high=${high} low=${low} fair=${fair} tooFew=${tooFew}`);
+  }
+
+  // Outlier self-check: 2200 is above p95 and >= 2x the median (1050).
+  const outlier = payOutlierFromPool(2200, pool);
+  const notOutlier = payOutlierFromPool(1950, pool);
+  const noPool = payOutlierFromPool(2200, [100, 200, 300]);
+  if (
+    !outlier?.extreme ||
+    outlier.median !== 1050 ||
+    Math.abs(outlier.ratio - 2.1) > 0.01 ||
+    notOutlier?.extreme !== false ||
+    noPool !== null
+  ) {
+    failed++;
+    console.error(
+      `FAIL outlier: extreme=${outlier?.extreme} median=${outlier?.median} ratio=${outlier?.ratio} notExtreme=${notOutlier?.extreme} noPool=${noPool}`,
+    );
   }
 
   if (failed === 0) console.log(`pay.ts self-check OK (${cases.length} cases)`);

@@ -4,6 +4,8 @@ import { db } from './db';
 import { jobPostings } from './schema';
 import { delay } from './utils';
 import { parsePay } from './pay';
+import { hashDescription } from './signals';
+import { enqueueAnalysis } from './overview';
 
 const SYNC_INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS ?? 120000);
 const SYNC_BATCH = Number(process.env.SYNC_BATCH ?? 5);
@@ -25,6 +27,9 @@ type ScrapedJob = {
   compensation: string;
   hoursPerWeek: string;
   jobDate: string;
+  employer: string;
+  employerId: number | null;
+  descriptionHash: string;
   payMin: number | null;
   payMax: number | null;
   payCurrency: string | null;
@@ -165,6 +170,8 @@ async function fetchJob(jobId: number): Promise<ScrapedJob | null> {
   const hoursPerWeek = fieldAfter($, 'HOURS PER WEEK');
   const rawDate = fieldAfter($, 'DATE UPDATED');
   const jobDate = toIsoDate(rawDate);
+  const employer = $('.job__logo').first().text().trim();
+  const employerIdMatch = html.match(/const employerId = (\d+);/);
 
   if (!jobDescription || !typeOfWork || !compensation || !jobDate) return null;
 
@@ -177,6 +184,9 @@ async function fetchJob(jobId: number): Promise<ScrapedJob | null> {
     compensation,
     hoursPerWeek,
     jobDate,
+    employer,
+    employerId: employerIdMatch ? Number(employerIdMatch[1]) : null,
+    descriptionHash: hashDescription(jobDescription),
     ...payColumns(compensation, hoursPerWeek),
   };
 }
@@ -201,7 +211,9 @@ async function insertJob(job: ScrapedJob): Promise<boolean> {
     .values(job)
     .onConflictDoNothing({ target: jobPostings.jobId })
     .returning({ id: jobPostings.id });
-  return result.length > 0;
+  if (result.length === 0) return false;
+  enqueueAnalysis(result[0].id);
+  return true;
 }
 
 async function getMaxStoredJobId(): Promise<number> {

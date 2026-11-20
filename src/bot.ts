@@ -1,7 +1,9 @@
 import { Bot } from 'grammy';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from './db';
-import { userSubscriptions, notifications } from './schema';
+import { jobPostings, userSubscriptions, userSettings, notifications, overviewFeedback } from './schema';
+import { isOverviewAvailable, type JobAnalysis } from './overview';
+import { escapeHtml } from './utils';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required');
@@ -19,9 +21,30 @@ const HELP = [
   '/keywordadd <k1, k2> — add keywords',
   '/keywordremove <k1, k2> — remove keywords',
   '/mysubs — show your keywords and activity',
+  '/job <jobId> — full AI analysis for an alerted job',
+  '/ai on|off — enable or disable the AI overview',
   '/unsub — remove all keywords',
   '/help — show this message',
 ].join('\n');
+
+async function getAiEnabled(chatId: number): Promise<boolean> {
+  const rows = await db
+    .select({ aiOverview: userSettings.aiOverview })
+    .from(userSettings)
+    .where(eq(userSettings.chatId, chatId))
+    .limit(1);
+  return rows[0]?.aiOverview ?? false;
+}
+
+async function setAiEnabled(chatId: number, enabled: boolean): Promise<void> {
+  await db
+    .insert(userSettings)
+    .values({ chatId, aiOverview: enabled, updatedAt: new Date() })
+    .onConflictDoUpdate({
+      target: userSettings.chatId,
+      set: { aiOverview: enabled, updatedAt: new Date() },
+    });
+}
 
 function parseKeywords(raw: string): string[] {
   return [...new Set(raw.split(',').map((k) => k.trim().toLowerCase()).filter(Boolean))];
@@ -40,8 +63,167 @@ function listKeywords(keywords: string[]): string {
   return keywords.map((k) => `• ${k}`).join('\n');
 }
 
-bot.command('start', (ctx) => ctx.reply(HELP));
-bot.command('help', (ctx) => ctx.reply(HELP));
+async function replyHelp(ctx: { chat?: { id: number }; reply: (text: string) => Promise<unknown> }) {
+  const chatId = ctx.chat?.id;
+  const on = chatId ? await getAiEnabled(chatId) : false;
+  await ctx.reply(`${HELP}\n\nAI overview: ${on ? 'ON' : 'OFF'}`);
+}
+
+bot.command('start', (ctx) => replyHelp(ctx));
+bot.command('help', (ctx) => replyHelp(ctx));
+
+bot.command('ai', async (ctx) => {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+
+  const arg = (ctx.match ?? '').trim().toLowerCase();
+  if (!arg) {
+    const on = await getAiEnabled(chatId);
+    await ctx.reply(
+      `AI overview: ${on ? 'ON' : 'OFF'}\n\nUsage:\n/ai on — enable\n/ai off — disable`,
+    );
+    return;
+  }
+  if (arg !== 'on' && arg !== 'off') {
+    await ctx.reply('Usage: /ai on | /ai off');
+    return;
+  }
+  if (arg === 'on') {
+    if (!isOverviewAvailable()) {
+      await ctx.reply('AI overview is not available right now.');
+      return;
+    }
+    await setAiEnabled(chatId, true);
+    await ctx.reply(
+      'AI overview: ON\nEach matching job alert gets one shared AI estimate. It is a heuristic, not a scam verdict. Turn it off with /ai off.',
+    );
+    return;
+  }
+  await setAiEnabled(chatId, false);
+  await ctx.reply('AI overview: OFF');
+});
+
+const LEGIT_LABEL = {
+  likely: '✅ Likely legit',
+  caution: '⚠️ Caution',
+  risk: '🚩 High risk',
+  unclear: '❓ Unclear',
+} as const;
+
+const BOTTOM_LABEL = { apply: 'Apply', maybe: 'Maybe', skip: 'Skip' } as const;
+
+bot.command('job', async (ctx) => {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  const jobId = Number((ctx.match ?? '').trim());
+  if (!Number.isFinite(jobId) || jobId <= 0) {
+    await ctx.reply('Usage: /job <jobId>');
+    return;
+  }
+
+  const [alerted] = await db
+    .select({ id: notifications.id })
+    .from(notifications)
+    .where(and(eq(notifications.chatId, chatId), eq(notifications.jobId, jobId)))
+    .limit(1);
+  if (!alerted) {
+    await ctx.reply('I have no alert for that job in this chat.');
+    return;
+  }
+
+  const [job] = await db
+    .select()
+    .from(jobPostings)
+    .where(eq(jobPostings.jobId, jobId))
+    .limit(1);
+  const analysis = job?.aiAnalysis as JobAnalysis | null | undefined;
+  if (!job || !analysis) {
+    await ctx.reply('No AI analysis is available for this job yet.');
+    return;
+  }
+
+  const final = analysis.final;
+  const lines: string[] = [
+    `<b>${escapeHtml(job.jobTitle ?? `Job ${jobId}`)}</b>`,
+    '',
+    '🤖 <b>AI analysis</b>',
+    `Bottom line: ${BOTTOM_LABEL[final.bottom_line]}`,
+    `Legit: ${LEGIT_LABEL[final.legit]} — ${escapeHtml(final.legit_reason)}`,
+    `What: ${escapeHtml(final.what)}`,
+    `Needs: ${escapeHtml(final.needs)}`,
+    `Watch: ${escapeHtml(final.watch)}`,
+  ];
+  if (final.ask.length > 0) lines.push(`Ask: ${escapeHtml(final.ask.join(' '))}`);
+
+  const modelRisks = final.risk_signals.map((s) => `• ${s.category}: "${s.quote}"`);
+  const hardRisks = analysis.signals.hardRisk.map((s) => `• ${s.category}: "${s.quote}" — ${s.reason}`);
+  const hardCautions = analysis.signals.hardCaution.map((s) => `• ${s.category}: "${s.quote}"`);
+  const soft = analysis.signals.soft.map((s) => `• ${s.category}: ${s.quote}`);
+  lines.push('', '<b>Risk quotes</b>');
+  const allRisks = [...new Set([...hardRisks, ...hardCautions, ...modelRisks])];
+  lines.push(...(allRisks.length > 0 ? allRisks.map(escapeHtml) : ['None flagged']));
+  if (soft.length > 0) {
+    lines.push('', '<b>Soft signals</b>');
+    lines.push(...soft.map(escapeHtml));
+  }
+
+  lines.push('', '<b>Gaps</b>');
+  lines.push(...(final.gaps.length > 0 ? final.gaps.map(escapeHtml) : ['None listed']));
+
+  const employer = analysis.employer;
+  lines.push('', '<b>Employer record</b>');
+  if (!employer) {
+    lines.push('No employer record available');
+  } else if (!employer.found) {
+    lines.push('Not found in OLJ records');
+  } else {
+    lines.push(`Name: ${escapeHtml(employer.name ?? 'Not stated')}`);
+    lines.push(`Paid active: ${employer.paidActive === null ? 'Unknown' : employer.paidActive ? 'Yes' : 'No'}`);
+    lines.push(`Complaints: ${employer.complaints ?? 'Unknown'}`);
+    lines.push(`Posts: ${employer.postCount ?? 'Unknown'} (${employer.newPostCount ?? 0} new)`);
+  }
+
+  const pay = analysis.pay;
+  lines.push('', '<b>Pay context</b>');
+  lines.push(`Listing: ${escapeHtml(pay.raw)}`);
+  lines.push(`Peer median: ${pay.median ?? 'Not stated'} · p95: ${pay.p95 ?? 'Not stated'}`);
+  lines.push(`Ratio: ${pay.ratio ?? 'Not stated'} · extreme: ${pay.extreme ? 'Yes' : 'No'}`);
+
+  lines.push(
+    '',
+    `<a href="https://www.onlinejobs.ph/jobseekers/job/${job.jobId}">View original listing</a>`,
+  );
+  await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+});
+
+bot.callbackQuery(/^fb:(helpful|unhelpful|report):(\d+)$/, async (ctx) => {
+  const chatId = ctx.chat?.id;
+  const value = ctx.match[1];
+  const jobId = Number(ctx.match[2]);
+  if (!chatId || !Number.isFinite(jobId)) {
+    await ctx.answerCallbackQuery({ text: 'Could not save feedback.' });
+    return;
+  }
+
+  const [alerted] = await db
+    .select({ id: notifications.id })
+    .from(notifications)
+    .where(and(eq(notifications.chatId, chatId), eq(notifications.jobId, jobId)))
+    .limit(1);
+  if (!alerted) {
+    await ctx.answerCallbackQuery({ text: 'No alert found for this job.' });
+    return;
+  }
+
+  await db
+    .insert(overviewFeedback)
+    .values({ chatId, jobId, value })
+    .onConflictDoUpdate({
+      target: [overviewFeedback.chatId, overviewFeedback.jobId],
+      set: { value, createdAt: new Date() },
+    });
+  await ctx.answerCallbackQuery({ text: 'Thanks — feedback saved.' });
+});
 
 bot.command('keywordsub', async (ctx) => {
   const unique = parseKeywords(ctx.match ?? '');
@@ -148,7 +330,9 @@ bot.command('mysubs', async (ctx) => {
   }
 
   lines.push('');
-  lines.push('Commands: /keywordadd · /keywordremove · /keywordsub · /unsub · /help');
+  lines.push(`AI overview: ${(await getAiEnabled(chatId)) ? 'ON' : 'OFF'}`);
+  lines.push('');
+  lines.push('Commands: /keywordadd · /keywordremove · /keywordsub · /job · /ai · /unsub · /help');
   await ctx.reply(lines.join('\n'));
 });
 

@@ -8,6 +8,8 @@ import {
   timestamp,
   numeric,
   real,
+  integer,
+  jsonb,
   index,
   uniqueIndex,
 } from 'drizzle-orm/pg-core';
@@ -36,10 +38,21 @@ export const jobPostings = pgTable(
     payUsdHour: real('pay_usd_hour'),
     payUsdMonth: real('pay_usd_month'),
     payConfidence: text('pay_confidence'),
+
+    employer: text('employer'),
+    employerId: bigint('employer_id', { mode: 'number' }),
+    descriptionHash: text('description_hash'),
+    aiOverview: text('ai_overview'),
+    aiAnalysis: jsonb('ai_analysis'),
+    aiVersion: integer('ai_version'),
+    aiUsage: jsonb('ai_usage'),
+    aiEscalated: boolean('ai_escalated').default(false),
   },
   (table) => ({
     payUsdMonthIdx: index('idx_job_postings_pay_usd_month').on(table.payUsdMonth),
     processedIdx: index('idx_job_postings_is_processed').on(table.isProcessed),
+    hashIdx: index('idx_job_postings_description_hash').on(table.descriptionHash),
+    employerIdx: index('idx_job_postings_employer_id').on(table.employerId),
   }),
 );
 
@@ -56,6 +69,39 @@ export const userSubscriptions = pgTable(
       table.chatId,
       table.keyword,
     ),
+  }),
+);
+
+/** Per-chat preferences. A missing row means every flag is off. */
+export const userSettings = pgTable('user_settings', {
+  chatId: bigint('chat_id', { mode: 'number' }).primaryKey(),
+  aiOverview: boolean('ai_overview').notNull().default(false),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+});
+
+/** Cached OLJ employer search result, reused for 7 days. */
+export const employerChecks = pgTable('employer_checks', {
+  employerId: bigint('employer_id', { mode: 'number' }).primaryKey(),
+  name: text('name'),
+  paidActive: boolean('paid_active'),
+  complaints: integer('complaints'),
+  postCount: integer('post_count'),
+  newPostCount: integer('new_post_count'),
+  checkedAt: timestamp('checked_at', { withTimezone: true }).defaultNow(),
+});
+
+/** Per-chat feedback on a generated overview. Stored only, never displayed. */
+export const overviewFeedback = pgTable(
+  'overview_feedback',
+  {
+    id: serial('id').primaryKey(),
+    chatId: bigint('chat_id', { mode: 'number' }).notNull(),
+    jobId: bigint('job_id', { mode: 'number' }).notNull(),
+    value: text('value').notNull(),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    uniq: uniqueIndex('overview_feedback_chat_id_job_id_key').on(table.chatId, table.jobId),
   }),
 );
 

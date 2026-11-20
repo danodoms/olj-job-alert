@@ -114,6 +114,53 @@ See `spec.md` for detailed technical specifications and implementation details.
 
 ---
 
+## AI overview (opt-in)
+
+Users enable an AI estimate per matched job with `/ai on`. It is off by default,
+and `/ai off` disables it. An analysis is generated once per job by a background
+worker, cached on the job row, and shared by every opted-in chat. Alerts never
+wait for the model; a missing analysis simply omits the block. `/job <id>` shows
+the full analysis for a job you were alerted about, and the alert buttons store
+helpful/unhelpful/report feedback.
+
+Add these to `.env`:
+
+```env
+OPENCODE_API_KEY=
+AI_MODEL=deepseek-v4.1-flash
+AI_ESCALATION_MODEL=deepseek-v4-pro
+AI_BASE_URL=https://opencode.ai/zen/go/v1
+AI_TIMEOUT_MS=20000
+```
+
+`OPENCODE_API_KEY` absent means the feature stays dormant and `/ai on` replies
+that it is unavailable.
+
+Analysis runs after the alert is queued, so the first alert may arrive without
+the block. Only jobs matching an AI-enabled chat's keywords are analyzed. Job
+text is sent to the model provider. Email local parts are redacted; phone
+numbers are not.
+
+Force regeneration after a prompt change, without re-alerting:
+
+```sh
+npm run reanalyze:overview
+```
+
+Default scope is the last 30 days and 200 jobs. Override with
+`REANALYZE_DAYS` and `REANALYZE_LIMIT`.
+
+Offline eval, requires a real key:
+
+```sh
+npm run eval:overview
+```
+
+The fixtures in `evals/overview-cases.json` are synthetic placeholders. Replace
+them with labeled real listings before using the metrics as a benchmark.
+
+---
+
 ## Notes
 
 - **Rate limiting:** Current settings scrape 5 jobs every 2 minutes with 0.05s delays between requests

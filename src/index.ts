@@ -4,9 +4,11 @@ import { startNotifier } from './notifier';
 import { startScraper } from './scraper';
 import { startStatus } from './status';
 import { migrate } from './db';
+import { enqueuePendingAnalyses } from './overview';
 
 async function main(): Promise<void> {
   await migrate();
+  await enqueuePendingAnalyses();
   startBot();
   startScraper();
   startNotifier();
