@@ -3,68 +3,15 @@ import { db } from './db';
 import { jobPostings } from './schema';
 import { userSubscriptions, userSettings } from './schema';
 import { notifications } from './schema';
-import { matchJob, describeMatches, type KeywordMatch } from './match';
-import { delay, escapeHtml } from './utils';
-import { bot } from './bot';
-import { formatPay, formatVerdict, verdictEmoji, type ParsedPay } from './pay';
-import { payInsightFor, type PayInsight } from './signals';
+import { matchJob, type KeywordMatch } from './match';
+import { delay } from './utils';
+import { payInsightFor } from './signals';
+import { buildAlertCaption, alertKeyboard } from './alert';
+import { sendAlert } from './banner';
+import type { JobAnalysis } from './overview';
 
 const NOTIFIER_INTERVAL_MS = Number(process.env.NOTIFIER_INTERVAL_MS ?? 20000);
 const NOTIFIER_BATCH = Number(process.env.NOTIFIER_BATCH ?? 20);
-const DESCRIPTION_LIMIT = 120;
-
-function buildMessage(
-  job: typeof jobPostings.$inferSelect,
-  insight: PayInsight | null,
-  matches: KeywordMatch[],
-  aiOverview: string | null,
-): string {
-  const description = (job.jobDescription ?? '').slice(0, DESCRIPTION_LIMIT);
-  const parsed: ParsedPay = {
-    payMin: job.payMin,
-    payMax: job.payMax,
-    payCurrency: job.payCurrency,
-    payPeriod: (job.payPeriod ?? 'unknown') as ParsedPay['payPeriod'],
-    payUnitLabel: job.payUnitLabel,
-    payUsdHour: job.payUsdHour,
-    payUsdMonth: job.payUsdMonth,
-    payConfidence: (job.payConfidence ?? 'none') as ParsedPay['payConfidence'],
-  };
-  const payText = formatPay(parsed);
-  const verdictText = insight ? formatVerdict(insight.verdict) : null;
-
-  const onlyPossible = matches.length > 0 && matches.every((m) => m.strength === 'possible');
-  const headline = onlyPossible ? '🔎 <b>Possible match</b>' : '🔔 <b>New job match!</b>';
-
-  const lines: string[] = [];
-  lines.push(
-    headline,
-    '',
-    `<b>${escapeHtml(job.jobTitle ?? '')}</b>`,
-    '',
-    `📝 ${escapeHtml(description)}...`,
-    '',
-    `💼 <b>Type:</b> ${escapeHtml(job.typeOfWork ?? '')}`,
-    `💰 <b>Pay:</b> ${escapeHtml(payText)}`,
-  );
-  if (verdictText) {
-    const emoji = verdictEmoji(insight!.verdict) ?? '';
-    lines.push(
-      `📊 <b>Market:</b> ${emoji} ${escapeHtml(verdictText)} · vs ${escapeHtml(insight!.peerLabel)}`,
-    );
-  }
-  if (aiOverview) lines.push('', escapeHtml(aiOverview));
-  if (matches.length > 0) {
-    lines.push(`🎯 <b>Matched:</b> ${escapeHtml(describeMatches(matches))}`);
-  }
-  lines.push(
-    `⏰ <b>Hours:</b> ${escapeHtml(job.hoursPerWeek ?? '')}`,
-    '',
-    `👉 <a href="https://www.onlinejobs.ph/jobseekers/job/${job.jobId}">Apply here</a>`,
-  );
-  if (aiOverview) lines.push('', `Details: /job ${job.jobId}`);
-  return lines.join('\n');
-}
 
 export async function runNotifier(): Promise<void> {
   const jobs = await db
@@ -117,31 +64,22 @@ export async function runNotifier(): Promise<void> {
 
     matched++;
     const insight = await payInsightFor(job);
-    const aiOverview = job.aiOverview;
+    const analysis = (job.aiAnalysis as JobAnalysis | null) ?? null;
 
     for (const { chatId, matches } of recipients) {
-      const showAi = aiChats.has(chatId) && Boolean(aiOverview);
-      const message = buildMessage(job, insight, matches, showAi ? aiOverview : null);
-      const reply_markup = showAi
-        ? {
-            inline_keyboard: [
-              [
-                { text: '👍 Helpful', callback_data: `fb:helpful:${job.jobId}` },
-                { text: '👎 Not helpful', callback_data: `fb:unhelpful:${job.jobId}` },
-                { text: '🚩 Report', callback_data: `fb:report:${job.jobId}` },
-              ],
-            ],
-          }
-        : undefined;
+      const showAi = aiChats.has(chatId) && Boolean(analysis);
+      const { caption, hasAi } = buildAlertCaption(
+        job,
+        insight,
+        matches,
+        showAi ? analysis : null,
+      );
 
       try {
-        await bot.api.sendMessage(
-          chatId,
-          message,
-          reply_markup ? { parse_mode: 'HTML', reply_markup } : { parse_mode: 'HTML' },
-        );
-        await db.insert(notifications).values({ chatId, jobId: job.jobId });
-        sent++;
+        if (await sendAlert(chatId, caption, job, alertKeyboard(job.jobId, hasAi))) {
+          await db.insert(notifications).values({ chatId, jobId: job.jobId });
+          sent++;
+        }
       } catch (err) {
         console.error(`[notifier] send to ${chatId} failed:`, err);
       }

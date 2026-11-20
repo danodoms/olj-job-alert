@@ -41,6 +41,7 @@ export const jobPostings = pgTable(
 
     employer: text('employer'),
     employerId: bigint('employer_id', { mode: 'number' }),
+    employerLogo: text('employer_logo'),
     descriptionHash: text('description_hash'),
     aiOverview: text('ai_overview'),
     aiAnalysis: jsonb('ai_analysis'),
@@ -104,6 +105,14 @@ export const overviewFeedback = pgTable(
     uniq: uniqueIndex('overview_feedback_chat_id_job_id_key').on(table.chatId, table.jobId),
   }),
 );
+
+/** Telegram file_id of the rendered employer banner. Regenerated on logo change or TTL. */
+export const employerBanners = pgTable('employer_banners', {
+  employerId: bigint('employer_id', { mode: 'number' }).primaryKey(),
+  fileId: text('file_id').notNull(),
+  logoUrl: text('logo_url'),
+  updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+});
 
 /** Log of alerts actually sent. Powers /mysubs insights and observability. */
 export const notifications = pgTable(

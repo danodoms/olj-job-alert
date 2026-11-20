@@ -215,10 +215,11 @@ function textFlags(description: string): { hard: RiskSignal[]; soft: SoftSignal[
   );
   if (scheme) addHard('payment', scheme, 'Gift card, wire, or overpayment scheme.');
 
-  // Buying your own laptop is normal. Only flag payment to the employer/vendor.
+  // Buying your own laptop, or the employer paying for it, is normal. Only flag
+  // money that goes to the employer, or buying the employer's own package.
   const equipment = affirmed(
     description,
-    /\b(?:pay|send|reimburse|deposit)\b[^.\n]{0,40}\b(?:equipment|laptop|computer|software)\b|\b(?:equipment|laptop|computer|software)\s+(?:fee|deposit)\b|\b(?:buy|purchase)\b[^.\n]{0,30}\bfrom (?:us|our (?:company|store|supplier))\b/i,
+    /\b(?:equipment|laptop|computer|software)\s+(?:fee|deposit)\b|\b(?:pay|send|deposit|reimburse)\b[^.\n]{0,20}\b(?:us|our (?:company|store|supplier))\b[^.\n]{0,20}\$\s?\d[\d,]*|\b(?:pay|send|deposit|reimburse)\b[^.\n]{0,20}\$\s?\d[\d,]*[^.\n]{0,40}\b(?:to|into)\s+(?:us|our (?:company|store|supplier))\b|\b(?:buy|purchase|pay for)\b[^.\n]{0,40}\b(?:(?:the|our|their) company(?:'s)?\s+(?:software|equipment|laptop|computer|package|kit)|from (?:us|our (?:company|store|supplier)))\b/i,
   );
   if (equipment) addHard('fee', equipment, 'Equipment payment requested.');
 
@@ -566,6 +567,43 @@ if (require.main === module) {
     noDuplicate,
   );
   check('buying your own laptop is not a hard fee', !ownLaptop.hardRisk.some((s) => s.category === 'fee'));
+
+  for (const text of [
+    'We reimburse equipment costs after 30 days.',
+    'We pay for your equipment and software.',
+    'We send you the equipment you need.',
+    'We pay our team $50 per referral.',
+    'We reimburse our team $50 monthly for internet.',
+  ]) {
+    const benefit = computeSignals(job(`${text} Requirements: typing. About us: firm.`), plainPay, null, noDuplicate);
+    check(`"${text}" is not a hard fee`, !benefit.hardRisk.some((s) => s.category === 'fee'));
+  }
+  const companyPackage = computeSignals(
+    job('You must purchase the company software package for $120 before starting. Requirements: typing. About us: firm.'),
+    plainPay,
+    null,
+    noDuplicate,
+  );
+  check('company software package is a hard fee', companyPackage.hardRisk.some((s) => s.category === 'fee'));
+  const equipmentPayment = computeSignals(
+    job('Send us $120 for the equipment. Requirements: typing. About us: firm.'),
+    plainPay,
+    null,
+    noDuplicate,
+  );
+  check(
+    'equipment payment quote keeps the full amount',
+    equipmentPayment.hardRisk.some((s) => s.category === 'fee' && s.quote.includes('$120')),
+  );
+
+  for (const text of [
+    'Send $120 to us for the equipment.',
+    'Pay $50 to our company for training.',
+    'Deposit $80 into our company account.',
+  ]) {
+    const reverse = computeSignals(job(`${text} Requirements: typing. About us: firm.`), plainPay, null, noDuplicate);
+    check(`"${text}" is a hard fee`, reverse.hardRisk.some((s) => s.category === 'fee'));
+  }
 
   check('hash is stable', hashDescription('A  role!') === hashDescription('a role'));
   check('email redaction keeps domain', redactEmails('Mail me@example.com') === 'Mail ***@example.com');

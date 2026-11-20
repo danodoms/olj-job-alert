@@ -2,7 +2,7 @@
  * AI overview pipeline: prompt, model calls, escalation/merge, render, and the
  * in-process analysis queue. The notifier never waits for this module.
  */
-import { eq, sql } from 'drizzle-orm';
+import { desc, eq, sql } from 'drizzle-orm';
 import { db } from './db';
 import { jobPostings, userSettings, userSubscriptions } from './schema';
 import { matchJob } from './match';
@@ -27,12 +27,12 @@ const AI_MODEL = process.env.AI_MODEL ?? 'deepseek-v4.1-flash';
 const AI_ESCALATION_MODEL = process.env.AI_ESCALATION_MODEL ?? 'deepseek-v4-pro';
 const AI_BASE_URL = (process.env.AI_BASE_URL ?? 'https://opencode.ai/zen/go/v1').replace(/\/+$/, '');
 // Analysis runs off the alert path, so allow for real model latency.
-const timeoutEnv = Number(process.env.AI_TIMEOUT_MS ?? 20000);
-const AI_TIMEOUT_MS = Number.isFinite(timeoutEnv) && timeoutEnv > 0 ? timeoutEnv : 20000;
+const timeoutEnv = Number(process.env.AI_TIMEOUT_MS ?? 45000);
+const AI_TIMEOUT_MS = Number.isFinite(timeoutEnv) && timeoutEnv > 0 ? timeoutEnv : 45000;
 const AI_SESSION = 'olj-job-alert';
-const AI_VERSION = 2;
-const AI_MAX_TOKENS = 800;
-const ESCALATION_MAX_TOKENS = 300;
+export const AI_VERSION = 2;
+const AI_MAX_TOKENS = 3000;
+const ESCALATION_MAX_TOKENS = 800;
 const QUEUE_CONCURRENCY = 2;
 const FIELD_LIMIT = 160;
 const EXCERPT_LIMIT = 2500;
@@ -176,14 +176,14 @@ export type OverviewJob = Pick<
   | 'employerId'
 >;
 
-const LEGIT_EMOJI: Record<Legit, string> = {
+export const LEGIT_EMOJI: Record<Legit, string> = {
   likely: '✅ Likely legit',
   caution: '⚠️ Caution',
   risk: '🚩 High risk',
   unclear: '❓ Unclear',
 };
 
-const BOTTOM_LABEL: Record<BottomLine, string> = {
+export const BOTTOM_LABEL: Record<BottomLine, string> = {
   apply: 'Apply',
   maybe: 'Maybe',
   skip: 'Skip',
@@ -628,25 +628,39 @@ async function hasAiUsers(): Promise<boolean> {
   return rows.length > 0;
 }
 
-/** Only analyze jobs that match a keyword of a chat with AI enabled. */
-async function hasAiMatch(job: typeof jobPostings.$inferSelect): Promise<boolean> {
+/** Keywords per AI-enabled chat, or null when no chat has AI enabled. */
+async function aiKeywordsByChat(): Promise<Map<number, string[]> | null> {
   const rows = await db
     .select({ chatId: userSubscriptions.chatId, keyword: userSubscriptions.keyword })
     .from(userSubscriptions)
     .innerJoin(userSettings, eq(userSettings.chatId, userSubscriptions.chatId))
     .where(eq(userSettings.aiOverview, true));
+  if (rows.length === 0) return null;
   const byChat = new Map<number, string[]>();
   for (const { chatId, keyword } of rows) {
     const list = byChat.get(chatId);
     if (list) list.push(keyword);
     else byChat.set(chatId, [keyword]);
   }
+  return byChat;
+}
+
+function matchesAiChat(
+  job: { jobTitle: string | null; jobDescription: string | null },
+  byChat: Map<number, string[]>,
+): boolean {
   const title = job.jobTitle ?? '';
   const description = job.jobDescription ?? '';
   for (const keywords of byChat.values()) {
     if (matchJob(title, description, keywords).length > 0) return true;
   }
   return false;
+}
+
+/** Only analyze jobs that match a keyword of a chat with AI enabled. */
+async function hasAiMatch(job: { jobTitle: string | null; jobDescription: string | null }): Promise<boolean> {
+  const byChat = await aiKeywordsByChat();
+  return byChat ? matchesAiChat(job, byChat) : false;
 }
 
 const queuedIds = new Set<number>();
@@ -702,12 +716,13 @@ async function pump(): Promise<void> {
   }
 }
 
-export async function analyzeJobById(jobDbId: number, force = false): Promise<void> {
-  if (!isOverviewAvailable()) return;
+export async function analyzeJobById(jobDbId: number, force = false): Promise<boolean> {
+  if (!isOverviewAvailable()) return false;
   const rows = await db.select().from(jobPostings).where(sql`${jobPostings.id} = ${jobDbId}`).limit(1);
   const job = rows[0];
-  if (!job || job.aiAnalysis) return;
-  if (!force && !(await hasAiMatch(job))) return;
+  if (!job) return false;
+  if (!force && job.aiAnalysis) return false;
+  if (!force && !(await hasAiMatch(job))) return false;
 
   const insight = await payInsightFor(job);
   const pay = payContextFor(job, insight);
@@ -722,7 +737,7 @@ export async function analyzeJobById(jobDbId: number, force = false): Promise<vo
   const hash = job.descriptionHash ?? hashDescription(job.jobDescription ?? '');
   const duplicate = await findDuplicate(hash, job.employerId, job.jobId);
   const result = await analyzeFields(job, pay, employer, duplicate);
-  if (!result) return;
+  if (!result) return false;
 
   await db
     .update(jobPostings)
@@ -734,7 +749,11 @@ export async function analyzeJobById(jobDbId: number, force = false): Promise<vo
       aiEscalated: result.analysis.escalated,
       descriptionHash: job.descriptionHash ?? hash,
     })
-    .where(sql`${jobPostings.id} = ${job.id} AND ${jobPostings.aiAnalysis} IS NULL`);
+    .where(
+      force
+        ? sql`${jobPostings.id} = ${job.id}`
+        : sql`${jobPostings.id} = ${job.id} AND ${jobPostings.aiAnalysis} IS NULL`,
+    );
   const mainUsage = result.usage.main;
   const escUsage = result.usage.escalation;
   console.log(
@@ -744,6 +763,7 @@ export async function analyzeJobById(jobDbId: number, force = false): Promise<vo
       `esc prompt=${escUsage?.prompt_tokens ?? '?'} completion=${escUsage?.completion_tokens ?? '?'} ` +
       `latency=${escUsage?.latency_ms ?? '?'}ms`,
   );
+  return true;
 }
 
 /**
@@ -752,16 +772,32 @@ export async function analyzeJobById(jobDbId: number, force = false): Promise<vo
  * nothing.
  */
 export async function enqueuePendingAnalyses(): Promise<void> {
-  if (!isOverviewAvailable() || !(await hasAiUsers())) return;
+  if (!isOverviewAvailable()) return;
+  const byChat = await aiKeywordsByChat();
+  if (!byChat) return;
+  // Keyword-filter before filling the queue so unmatched recent jobs cannot
+  // starve real retries. ponytail: scan capped at 2000; add an ai_skipped
+  // marker column if daily job volume ever exceeds that.
   const rows = await db
-    .select({ id: jobPostings.id })
+    .select({
+      id: jobPostings.id,
+      jobTitle: jobPostings.jobTitle,
+      jobDescription: jobPostings.jobDescription,
+    })
     .from(jobPostings)
     .where(
       sql`${jobPostings.aiAnalysis} IS NULL
         AND (${jobPostings.isProcessed} = false OR ${jobPostings.createdAt} > now() - interval '2 days')`,
     )
-    .limit(100);
-  for (const row of rows) enqueueAnalysis(row.id);
+    .orderBy(desc(jobPostings.createdAt))
+    .limit(2000);
+  let queued = 0;
+  for (const row of rows) {
+    if (queued >= 100) break;
+    if (!matchesAiChat(row, byChat)) continue;
+    enqueueAnalysis(row.id);
+    queued++;
+  }
 }
 
 // ---------------------------------------------------------------------------

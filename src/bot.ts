@@ -1,9 +1,17 @@
-import { Bot } from 'grammy';
+import { Bot, type Context } from 'grammy';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from './db';
 import { jobPostings, userSubscriptions, userSettings, notifications, overviewFeedback } from './schema';
-import { isOverviewAvailable, type JobAnalysis } from './overview';
-import { escapeHtml } from './utils';
+import {
+  AI_VERSION,
+  BOTTOM_LABEL,
+  LEGIT_EMOJI,
+  isOverviewAvailable,
+  type JobAnalysis,
+} from './overview';
+import { defangUrls, escapeHtml, makeExcerpt, visibleLength } from './utils';
+import { formatPay } from './pay';
+import { alertKeyboard, hoursLabel, parsedPayOf } from './alert';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required');
@@ -103,72 +111,66 @@ bot.command('ai', async (ctx) => {
   await ctx.reply('AI overview: OFF');
 });
 
-const LEGIT_LABEL = {
-  likely: '✅ Likely legit',
-  caution: '⚠️ Caution',
-  risk: '🚩 High risk',
-  unclear: '❓ Unclear',
-} as const;
+const JOB_DETAIL_CAP = 3500;
+const MESSAGE_LIMIT = 4096;
 
-const BOTTOM_LABEL = { apply: 'Apply', maybe: 'Maybe', skip: 'Skip' } as const;
+type DetailFailure = 'no_alert' | 'no_analysis' | 'outdated';
+type DetailResult = { ok: true; main: string; evidence: string } | { ok: false; reason: DetailFailure };
 
-bot.command('job', async (ctx) => {
-  const chatId = ctx.chat?.id;
-  if (!chatId) return;
-  const jobId = Number((ctx.match ?? '').trim());
-  if (!Number.isFinite(jobId) || jobId <= 0) {
-    await ctx.reply('Usage: /job <jobId>');
-    return;
-  }
+function evidenceBlock(title: string, lines: string[]): string {
+  if (lines.length === 0) return '';
+  return `<blockquote expandable>\n<b>${title}</b>\n${lines.join('\n')}\n</blockquote>`;
+}
 
+async function buildJobDetail(chatId: number, jobId: number): Promise<DetailResult> {
   const [alerted] = await db
     .select({ id: notifications.id })
     .from(notifications)
     .where(and(eq(notifications.chatId, chatId), eq(notifications.jobId, jobId)))
     .limit(1);
-  if (!alerted) {
-    await ctx.reply('I have no alert for that job in this chat.');
-    return;
-  }
+  if (!alerted) return { ok: false, reason: 'no_alert' };
 
   const [job] = await db
     .select()
     .from(jobPostings)
     .where(eq(jobPostings.jobId, jobId))
     .limit(1);
-  const analysis = job?.aiAnalysis as JobAnalysis | null | undefined;
-  if (!job || !analysis) {
-    await ctx.reply('No AI analysis is available for this job yet.');
-    return;
+  if (!job) return { ok: false, reason: 'no_alert' };
+  if (!job.aiAnalysis || job.aiVersion !== AI_VERSION) {
+    return { ok: false, reason: job.aiAnalysis ? 'outdated' : 'no_analysis' };
   }
 
+  const analysis = job.aiAnalysis as JobAnalysis;
   const final = analysis.final;
-  const lines: string[] = [
-    `<b>${escapeHtml(job.jobTitle ?? `Job ${jobId}`)}</b>`,
-    '',
-    '🤖 <b>AI analysis</b>',
-    `Bottom line: ${BOTTOM_LABEL[final.bottom_line]}`,
-    `Legit: ${LEGIT_LABEL[final.legit]} — ${escapeHtml(final.legit_reason)}`,
-    `What: ${escapeHtml(final.what)}`,
-    `Needs: ${escapeHtml(final.needs)}`,
-    `Watch: ${escapeHtml(final.watch)}`,
-  ];
-  if (final.ask.length > 0) lines.push(`Ask: ${escapeHtml(final.ask.join(' '))}`);
+  const meta = [job.employer, job.typeOfWork, hoursLabel(job.hoursPerWeek)]
+    .map((part) => part?.replace(/\s+/g, ' ').trim())
+    .filter(Boolean)
+    .join(' · ');
 
-  const modelRisks = final.risk_signals.map((s) => `• ${s.category}: "${s.quote}"`);
-  const hardRisks = analysis.signals.hardRisk.map((s) => `• ${s.category}: "${s.quote}" — ${s.reason}`);
-  const hardCautions = analysis.signals.hardCaution.map((s) => `• ${s.category}: "${s.quote}"`);
-  const soft = analysis.signals.soft.map((s) => `• ${s.category}: ${s.quote}`);
-  lines.push('', '<b>Risk quotes</b>');
-  const allRisks = [...new Set([...hardRisks, ...hardCautions, ...modelRisks])];
-  lines.push(...(allRisks.length > 0 ? allRisks.map(escapeHtml) : ['None flagged']));
-  if (soft.length > 0) {
-    lines.push('', '<b>Soft signals</b>');
-    lines.push(...soft.map(escapeHtml));
+  const lines: string[] = [`<b>${escapeHtml(job.jobTitle ?? `Job ${jobId}`)}</b>`];
+  if (meta) lines.push(`<i>${escapeHtml(meta)}</i>`);
+
+  const excerpt = makeExcerpt(job.jobDescription ?? '', 800, job.jobTitle ?? undefined);
+  if (excerpt) lines.push('', `📝 <i>“${escapeHtml(defangUrls(excerpt))}”</i>`);
+
+  lines.push('', `💰 <b>${escapeHtml(formatPay(parsedPayOf(job)))}</b>`);
+  const pay = analysis.pay;
+  const market = [
+    pay.median !== null ? `median $${pay.median}` : null,
+    pay.p95 !== null ? `p95 $${pay.p95}` : null,
+    pay.ratio !== null ? `${pay.ratio}× median` : null,
+  ].filter(Boolean);
+  if (market.length > 0) {
+    lines.push(`📊 <b>Market:</b> ${escapeHtml(market.join(' · '))} · vs ${escapeHtml(pay.peerLabel)}`);
   }
 
-  lines.push('', '<b>Gaps</b>');
-  lines.push(...(final.gaps.length > 0 ? final.gaps.map(escapeHtml) : ['None listed']));
+  lines.push('', '🤖 <b>AI overview</b>');
+  lines.push(`<b>Bottom line:</b> ${BOTTOM_LABEL[final.bottom_line]}`);
+  lines.push(`<b>What:</b> ${escapeHtml(defangUrls(final.what))}`);
+  lines.push(`<b>Needs:</b> ${escapeHtml(defangUrls(final.needs))}`);
+  lines.push(`<b>Legit:</b> ${LEGIT_EMOJI[final.legit]} — ${escapeHtml(defangUrls(final.legit_reason))}`);
+  lines.push(`<b>Watch:</b> ${escapeHtml(defangUrls(final.watch))}`);
+  if (final.ask.length > 0) lines.push(`<b>Ask:</b> ${escapeHtml(defangUrls(final.ask.join(' ')))}`);
 
   const employer = analysis.employer;
   lines.push('', '<b>Employer record</b>');
@@ -178,22 +180,92 @@ bot.command('job', async (ctx) => {
     lines.push('Not found in OLJ records');
   } else {
     lines.push(`Name: ${escapeHtml(employer.name ?? 'Not stated')}`);
-    lines.push(`Paid active: ${employer.paidActive === null ? 'Unknown' : employer.paidActive ? 'Yes' : 'No'}`);
+    lines.push(
+      `Paid active: ${employer.paidActive === null ? 'Unknown' : employer.paidActive ? 'Yes' : 'No'}`,
+    );
     lines.push(`Complaints: ${employer.complaints ?? 'Unknown'}`);
     lines.push(`Posts: ${employer.postCount ?? 'Unknown'} (${employer.newPostCount ?? 0} new)`);
   }
 
-  const pay = analysis.pay;
-  lines.push('', '<b>Pay context</b>');
-  lines.push(`Listing: ${escapeHtml(pay.raw)}`);
-  lines.push(`Peer median: ${pay.median ?? 'Not stated'} · p95: ${pay.p95 ?? 'Not stated'}`);
-  lines.push(`Ratio: ${pay.ratio ?? 'Not stated'} · extreme: ${pay.extreme ? 'Yes' : 'No'}`);
+  lines.push('', '<i>AI estimate. Verify before sharing documents.</i>');
+  const main = lines.join('\n');
 
-  lines.push(
-    '',
-    `<a href="https://www.onlinejobs.ph/jobseekers/job/${job.jobId}">View original listing</a>`,
-  );
-  await ctx.reply(lines.join('\n'), { parse_mode: 'HTML' });
+  const signals = analysis.signals;
+  const risks = [
+    ...signals.hardRisk.map(
+      (s) => `• ${s.category}: "${defangUrls(s.quote)}" — ${defangUrls(s.reason)}`,
+    ),
+    ...signals.hardCaution.map((s) => `• ${s.category}: "${defangUrls(s.quote)}"`),
+    ...final.risk_signals.map((s) => `• ${s.category}: "${defangUrls(s.quote)}"`),
+    ...signals.soft.map((s) => `• ${s.category}: ${defangUrls(s.quote)}`),
+  ].map(escapeHtml);
+  let riskLines = [...new Set(risks)];
+  let gapLines = final.gaps.map((gap) => escapeHtml(defangUrls(gap)));
+
+  let evidence = [evidenceBlock('Risk quotes', riskLines), evidenceBlock('Gaps', gapLines)]
+    .filter(Boolean)
+    .join('\n\n');
+  while (visibleLength(`${main}\n\n${evidence}`) > JOB_DETAIL_CAP) {
+    if (gapLines.length > 0) gapLines = gapLines.slice(0, -1);
+    else if (riskLines.length > 0) riskLines = riskLines.slice(0, -1);
+    else break;
+    evidence = [evidenceBlock('Risk quotes', riskLines), evidenceBlock('Gaps', gapLines)]
+      .filter(Boolean)
+      .join('\n\n');
+  }
+
+  return { ok: true, main, evidence };
+}
+
+async function sendJobDetail(
+  ctx: Context,
+  chatId: number,
+  jobId: number,
+): Promise<'sent' | DetailFailure> {
+  const detail = await buildJobDetail(chatId, jobId);
+  if (!detail.ok) return detail.reason;
+
+  const options = {
+    parse_mode: 'HTML' as const,
+    link_preview_options: { is_disabled: true },
+  };
+  const combined = detail.evidence ? `${detail.main}\n\n${detail.evidence}` : detail.main;
+  if (visibleLength(combined) <= MESSAGE_LIMIT) {
+    await ctx.reply(combined, { ...options, reply_markup: alertKeyboard(jobId, false) });
+  } else {
+    await ctx.reply(detail.main, { ...options, reply_markup: alertKeyboard(jobId, false) });
+    if (detail.evidence) await ctx.reply(detail.evidence, options);
+  }
+  return 'sent';
+}
+
+function detailFailureText(reason: DetailFailure): string {
+  if (reason === 'no_alert') return 'I have no alert for that job in this chat.';
+  if (reason === 'outdated') return 'Analysis is outdated. Try again later.';
+  return 'No AI analysis is available for this job yet.';
+}
+
+bot.command('job', async (ctx) => {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  const jobId = Number((ctx.match ?? '').trim());
+  if (!Number.isFinite(jobId) || jobId <= 0) {
+    await ctx.reply('Usage: /job <jobId>');
+    return;
+  }
+  const result = await sendJobDetail(ctx, chatId, jobId);
+  if (result !== 'sent') await ctx.reply(detailFailureText(result));
+});
+
+bot.callbackQuery(/^job:(\d+)$/, async (ctx) => {
+  const chatId = ctx.chat?.id;
+  const jobId = Number(ctx.match[1]);
+  if (!chatId) {
+    await ctx.answerCallbackQuery({ text: 'Not available.' });
+    return;
+  }
+  const result = await sendJobDetail(ctx, chatId, jobId);
+  await ctx.answerCallbackQuery(result === 'sent' ? undefined : { text: 'Not available.' });
 });
 
 bot.callbackQuery(/^fb:(helpful|unhelpful|report):(\d+)$/, async (ctx) => {
@@ -201,7 +273,7 @@ bot.callbackQuery(/^fb:(helpful|unhelpful|report):(\d+)$/, async (ctx) => {
   const value = ctx.match[1];
   const jobId = Number(ctx.match[2]);
   if (!chatId || !Number.isFinite(jobId)) {
-    await ctx.answerCallbackQuery({ text: 'Could not save feedback.' });
+    await ctx.answerCallbackQuery({ text: 'Not available.' });
     return;
   }
 
@@ -211,18 +283,23 @@ bot.callbackQuery(/^fb:(helpful|unhelpful|report):(\d+)$/, async (ctx) => {
     .where(and(eq(notifications.chatId, chatId), eq(notifications.jobId, jobId)))
     .limit(1);
   if (!alerted) {
-    await ctx.answerCallbackQuery({ text: 'No alert found for this job.' });
+    await ctx.answerCallbackQuery({ text: 'Not available.' });
     return;
   }
 
+  let saved = true;
   await db
     .insert(overviewFeedback)
     .values({ chatId, jobId, value })
     .onConflictDoUpdate({
       target: [overviewFeedback.chatId, overviewFeedback.jobId],
       set: { value, createdAt: new Date() },
+    })
+    .catch((err) => {
+      saved = false;
+      console.error('[bot] feedback save failed:', err);
     });
-  await ctx.answerCallbackQuery({ text: 'Thanks — feedback saved.' });
+  await ctx.answerCallbackQuery({ text: saved ? 'Thanks — feedback saved.' : 'Could not save feedback.' });
 });
 
 bot.command('keywordsub', async (ctx) => {

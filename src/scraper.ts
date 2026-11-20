@@ -2,7 +2,7 @@ import * as cheerio from 'cheerio';
 import { sql } from 'drizzle-orm';
 import { db } from './db';
 import { jobPostings } from './schema';
-import { delay } from './utils';
+import { delay, isAllowedLogoUrl } from './utils';
 import { parsePay } from './pay';
 import { hashDescription } from './signals';
 import { enqueueAnalysis } from './overview';
@@ -29,6 +29,7 @@ type ScrapedJob = {
   jobDate: string;
   employer: string;
   employerId: number | null;
+  employerLogo: string | null;
   descriptionHash: string;
   payMin: number | null;
   payMax: number | null;
@@ -170,8 +171,11 @@ async function fetchJob(jobId: number): Promise<ScrapedJob | null> {
   const hoursPerWeek = fieldAfter($, 'HOURS PER WEEK');
   const rawDate = fieldAfter($, 'DATE UPDATED');
   const jobDate = toIsoDate(rawDate);
-  const employer = $('.job__logo').first().text().trim();
+  const employer = $('.job__logo').first().text().replace(/\s+/g, ' ').trim();
   const employerIdMatch = html.match(/const employerId = (\d+);/);
+  const rawLogo = $('.job__logo img').first().attr('src')?.trim() ?? '';
+  const logoUrl = rawLogo.startsWith('//') ? `https:${rawLogo}` : rawLogo;
+  const employerLogo = isAllowedLogoUrl(logoUrl) ? logoUrl : null;
 
   if (!jobDescription || !typeOfWork || !compensation || !jobDate) return null;
 
@@ -186,6 +190,7 @@ async function fetchJob(jobId: number): Promise<ScrapedJob | null> {
     jobDate,
     employer,
     employerId: employerIdMatch ? Number(employerIdMatch[1]) : null,
+    employerLogo,
     descriptionHash: hashDescription(jobDescription),
     ...payColumns(compensation, hoursPerWeek),
   };

@@ -4,7 +4,7 @@ import { jobPostings, userSubscriptions } from './schema';
 import { sql } from 'drizzle-orm';
 import { formatPay, type ParsedPay } from './pay';
 
-const STATUS_PORT = Number(process.env.STATUS_PORT) || 3000;
+const STATUS_PORT = Number(process.env.STATUS_PORT) || 7331;
 const STATUS_ENABLED = process.env.STATUS_ENABLED !== 'false';
 const SYNC_INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS) || 120000;
 const STALE_MULTIPLIER = 2;

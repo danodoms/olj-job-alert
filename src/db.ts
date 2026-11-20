@@ -27,7 +27,15 @@ ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS ai_usage jsonb;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS ai_escalated boolean DEFAULT false;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS employer text;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS employer_id bigint;
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS employer_logo text;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS description_hash text;
+CREATE TABLE IF NOT EXISTS employer_banners (
+  employer_id bigint PRIMARY KEY,
+  file_id text NOT NULL,
+  logo_url text,
+  updated_at timestamptz DEFAULT now()
+);
+ALTER TABLE employer_banners ADD COLUMN IF NOT EXISTS logo_url text;
 CREATE TABLE IF NOT EXISTS user_settings (
   chat_id bigint PRIMARY KEY,
   ai_overview boolean NOT NULL DEFAULT false,

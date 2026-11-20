@@ -94,11 +94,21 @@ async function fetchEmployerRecord(name: string, fetchImpl: FetchLike): Promise<
       .first()
       .attr('value');
     if (!token) throw new Error('employer search CSRF token missing');
+    // Node fetch keeps no cookies, so carry the session cookie to the POST in
+    // case OLJ binds the token to a session.
+    const cookie = searchPage.headers
+      .getSetCookie()
+      .map((value) => value.split(';')[0])
+      .join('; ');
 
     const body = new URLSearchParams({ 'csrf-token': token, search: name, 'btn-search': '' });
     const res = await fetchImpl(`${BASE}/jobseekers/employersearch/`, {
       method: 'POST',
-      headers: { ...headers, 'Content-Type': 'application/x-www-form-urlencoded' },
+      headers: {
+        ...headers,
+        'Content-Type': 'application/x-www-form-urlencoded',
+        ...(cookie ? { Cookie: cookie } : {}),
+      },
       body,
       signal: controller.signal,
     });
