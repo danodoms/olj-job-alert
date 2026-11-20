@@ -40,13 +40,16 @@ function containsPhrase(textWords: string[], keyword: string): boolean {
   if (kwWords.length === 0) return false;
   const kw = kwWords.join('');
 
-  // Try every window of consecutive words whose compacted length equals kw.
+  // Try every window of consecutive words whose compacted length matches kw.
+  // Plurals count: `web developers` is a title hit for `web developer`.
+  const kwPlural = `${kw}s`;
+  const kwPluralEs = `${kw}es`;
   for (let start = 0; start < textWords.length; start++) {
     let acc = '';
     for (let end = start; end < textWords.length; end++) {
       acc += textWords[end];
-      if (acc === kw) return true;
-      if (acc.length >= kw.length) break;
+      if (acc === kw || acc === kwPlural || acc === kwPluralEs) return true;
+      if (acc.length >= kwPluralEs.length) break;
     }
   }
   return false;
@@ -129,6 +132,15 @@ if (require.main === module) {
   const m2 = matchJob('SEO Expert', 'Work with our in-house developer on campaigns.', ['developer']);
   check('desc-only is possible', m2[0]?.strength, 'possible');
   check('desc-only field', m2[0]?.fields, ['description']);
+
+  // Plurals still hit, and stay strong when they land in the title.
+  const plural = matchJob('Web Developers (Front-End and Back-End)', 'Build pages.', [
+    'web developer',
+  ]);
+  check('plural title hit', plural[0]?.fields, ['title']);
+  check('plural title is strong', plural[0]?.strength, 'strong');
+  check('plural desc hit', matchKeywords('We hire designers', ['designer']).length, 1);
+  check('plural no partial', matchKeywords('reactive systems', ['react']).length, 0);
 
   // No false partial match: 'react' must not match 'reactive'.
   check('no partial match', matchKeywords('reactive systems', ['react']).length, 0);

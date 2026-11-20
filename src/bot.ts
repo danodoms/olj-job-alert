@@ -19,7 +19,7 @@ if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required');
 export const bot = new Bot(token);
 
 /** Max keywords a subscriber may hold. */
-const MAX_KEYWORDS = 5;
+const MAX_KEYWORDS = 10;
 
 const HELP = [
   'OLJAlerts — job alerts on Telegram',
