@@ -48,6 +48,7 @@ export const jobPostings = pgTable(
     aiVersion: integer('ai_version'),
     aiUsage: jsonb('ai_usage'),
     aiEscalated: boolean('ai_escalated').default(false),
+    aiAttempts: integer('ai_attempts').default(0),
   },
   (table) => ({
     payUsdMonthIdx: index('idx_job_postings_pay_usd_month').on(table.payUsdMonth),

@@ -43,6 +43,8 @@ async function main(): Promise<void> {
   let noAnalysis = 0;
   let correct = 0;
   let likelyOverCaution = 0;
+  let quoteTotal = 0;
+  let quoteDropped = 0;
   const matrix: Record<string, Record<string, number>> = {};
 
   for (const item of cases) {
@@ -87,9 +89,15 @@ async function main(): Promise<void> {
       employerId: employer ? 1 : null,
     };
 
-    const result = await analyzeFields(job, pay, employer);
+    let result: Awaited<ReturnType<typeof analyzeFields>> = null;
+    let failure = 'no analysis';
+    try {
+      result = await analyzeFields(job, pay, employer);
+    } catch (err) {
+      failure = err instanceof Error ? err.message : String(err);
+    }
     if (!result) {
-      console.error(`FAIL ${item.id}: no analysis`);
+      console.error(`FAIL ${item.id}: ${failure}`);
       noAnalysis++;
       matrix[item.expected].error = (matrix[item.expected].error ?? 0) + 1;
       continue;
@@ -106,6 +114,8 @@ async function main(): Promise<void> {
     tokens += usageTokens;
     latency += (result.usage.main?.latency_ms ?? 0) + (result.usage.escalation?.latency_ms ?? 0);
     if (result.analysis.escalated) escalated++;
+    quoteTotal += result.quoteStats.total;
+    quoteDropped += result.quoteStats.dropped;
     if (got === 'caution') cautionCount++;
     if (item.expected === 'risk' && got === 'risk') riskHit++;
     if (item.expected === 'likely' && got === 'risk') legitFalsePositive++;
@@ -125,6 +135,7 @@ async function main(): Promise<void> {
         legitFalsePositiveRate: pct(legitFalsePositive, legitTotal),
         cautionRate: pct(cautionCount, cases.length),
         escalationRate: pct(escalated, cases.length),
+        quoteVerificationFailureRate: pct(quoteDropped, quoteTotal),
         avgTokens: Math.round(tokens / cases.length),
         avgLatencyMs: Math.round(latency / cases.length),
       },

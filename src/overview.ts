@@ -2,7 +2,7 @@
  * AI overview pipeline: prompt, model calls, escalation/merge, render, and the
  * in-process analysis queue. The notifier never waits for this module.
  */
-import { desc, eq, sql } from 'drizzle-orm';
+import { asc, desc, eq, sql } from 'drizzle-orm';
 import { db } from './db';
 import { jobPostings, userSettings, userSubscriptions } from './schema';
 import { matchJob } from './match';
@@ -14,6 +14,7 @@ import {
   payContextFor,
   payInsightFor,
   redactEmails,
+  redactPhones,
   hashDescription,
   type DeterministicSignals,
   type DuplicateInfo,
@@ -36,6 +37,9 @@ const ESCALATION_MAX_TOKENS = 800;
 const QUEUE_CONCURRENCY = 2;
 const FIELD_LIMIT = 160;
 const EXCERPT_LIMIT = 2500;
+
+/** Network errors, 429, and 5xx are worth retrying; timeouts and bad JSON are not. */
+class TransientAiError extends Error {}
 
 const SIGNAL_LINE =
   /fee|deposit|pay|salary|rate|trial|unpaid|training|interview|apply|contact|email|whatsapp|telegram|skype|bank|passport|crypto|usdt|commission|hours|contract/i;
@@ -162,6 +166,7 @@ export type AnalysisResult = {
   analysis: JobAnalysis;
   usage: AiUsage;
   overview: string;
+  quoteStats: { total: number; dropped: number };
 };
 
 export type OverviewJob = Pick<
@@ -318,24 +323,29 @@ export function buildExcerpt(description: string, title: string): string {
   return parts.join('\n').slice(0, EXCERPT_LIMIT);
 }
 
+function redactText(value: string): string {
+  return redactPhones(redactEmails(value));
+}
+
 function buildMainUser(
   job: OverviewJob,
   pay: PayContext,
   employer: EmployerSummary | null,
   signals: DeterministicSignals,
+  excerpt: string,
 ): string {
   return JSON.stringify({
-    title: job.jobTitle ?? '',
-    type_of_work: job.typeOfWork ?? '',
-    compensation: job.compensation ?? '',
-    hours_per_week: job.hoursPerWeek ?? '',
-    job_skills: job.jobSkills ?? '',
-    description: redactEmails(buildExcerpt(job.jobDescription ?? '', job.jobTitle ?? '')),
-    pay_context: pay,
+    title: redactText(job.jobTitle ?? ''),
+    type_of_work: redactText(job.typeOfWork ?? ''),
+    compensation: redactText(job.compensation ?? ''),
+    hours_per_week: redactText(job.hoursPerWeek ?? ''),
+    job_skills: redactText(job.jobSkills ?? ''),
+    description: excerpt,
+    pay_context: { ...pay, raw: redactText(pay.raw), peerLabel: redactText(pay.peerLabel) },
     employer: employer
       ? {
           found: employer.found,
-          name: employer.name,
+          name: employer.name ? redactText(employer.name) : null,
           name_matches: employer.nameMatches,
           paid_active: employer.paidActive,
           complaints: employer.complaints,
@@ -344,13 +354,22 @@ function buildMainUser(
         }
       : 'No employer record available',
     hard_flags: {
-      risk: signals.hardRisk.map((s) => ({ category: s.category, quote: s.quote, reason: s.reason })),
-      caution: signals.hardCaution.map((s) => ({ category: s.category, quote: s.quote, reason: s.reason })),
+      risk: signals.hardRisk.map((s) => ({
+        category: s.category,
+        quote: redactText(s.quote),
+        reason: redactText(s.reason),
+      })),
+      caution: signals.hardCaution.map((s) => ({
+        category: s.category,
+        quote: redactText(s.quote),
+        reason: redactText(s.reason),
+      })),
     },
-    soft_signals: signals.soft.map((s) => ({ category: s.category, quote: s.quote })),
-    gaps: signals.gaps,
+    soft_signals: signals.soft.map((s) => ({ category: s.category, quote: redactText(s.quote) })),
+    gaps: signals.gaps.map(redactText),
     duplicate: signals.duplicate,
     email: signals.email,
+    links: signals.links.map(redactText),
   });
 }
 
@@ -361,7 +380,7 @@ async function callModel(
   system: string,
   user: string,
   maxTokens: number,
-  reasoning: 'low' | 'medium' | null,
+  reasoning: 'low' | 'high' | null,
   fetchImpl: FetchLike,
 ): Promise<CallResult | null> {
   const key = process.env.OPENCODE_API_KEY;
@@ -400,16 +419,18 @@ async function callModel(
   let res: { status: number; ok: boolean; text: string };
   try {
     res = await send(true);
-    if (res.status === 400 && reasoning) {
-      // Some endpoints reject reasoning_effort; retry once without it.
+    if (res.status === 400 && reasoning && /reasoning_effort/i.test(res.text)) {
+      // Retry only when the error names reasoning_effort; other 400s are permanent.
       res = await send(false);
     }
   } catch (err) {
     console.error(`[overview] ${model} request failed or timed out:`, err);
-    return null;
+    if ((err as { name?: string })?.name === 'AbortError') return null;
+    throw new TransientAiError('request failed');
   }
   if (!res.ok) {
     console.error(`[overview] ${model} HTTP ${res.status}`);
+    if (res.status === 429 || res.status >= 500) throw new TransientAiError(`HTTP ${res.status}`);
     return null;
   }
 
@@ -443,9 +464,18 @@ async function callModel(
 }
 
 function shouldEscalate(main: MainAnalysis, signals: DeterministicSignals, pay: PayContext): boolean {
-  const conflict =
-    (signals.hardRisk.length > 0 && main.legit !== 'risk') ||
-    (signals.hardCaution.length > 0 && LEGIT_RANK[main.legit] < LEGIT_RANK.caution);
+  // A verified hard risk is fixed; a covered caution needs no second pass.
+  if (signals.hardRisk.length > 0) return false;
+  if (main.legit === 'caution' && signals.hardCaution.length > 0 && main.confidence !== 'low') return false;
+  if (
+    main.legit === 'likely' &&
+    signals.hardCaution.length === 0 &&
+    !pay.extreme &&
+    main.confidence !== 'low'
+  ) {
+    return false;
+  }
+  const conflict = signals.hardCaution.length > 0 && LEGIT_RANK[main.legit] < LEGIT_RANK.caution;
   return (
     main.legit === 'caution' ||
     main.legit === 'risk' ||
@@ -468,7 +498,10 @@ function merge(
     if (main.legit === 'risk' && escalation.legit === 'risk') final = 'risk';
     else if (
       (main.legit === 'risk' || escalation.legit === 'risk') &&
-      (main.legit === 'caution' || escalation.legit === 'caution')
+      (main.legit === 'caution' ||
+        escalation.legit === 'caution' ||
+        main.legit === 'unclear' ||
+        escalation.legit === 'unclear')
     ) {
       final = 'caution';
     } else if (main.legit === 'likely' && escalation.legit === 'likely' && signals.hardCaution.length === 0) {
@@ -551,6 +584,32 @@ export function renderOverview(final: FinalAnalysis): string {
   ].join('\n');
 }
 
+/** Drop model quotes absent from the excerpt, and downgrade risk without one. */
+function verifyQuotes(
+  main: MainAnalysis,
+  excerpt: string,
+  hasHardRisk: boolean,
+): { main: MainAnalysis; total: number; dropped: number } {
+  const hay = excerpt.replace(/\s+/g, ' ').trim();
+  const kept = main.risk_signals.filter((s) => hay.includes(s.quote.replace(/\s+/g, ' ').trim()));
+  const dropped = main.risk_signals.length - kept.length;
+  if (dropped > 0) console.error(`[overview] dropped ${dropped} unverified model risk quote(s)`);
+  if (main.legit === 'risk' && kept.length === 0 && !hasHardRisk) {
+    return {
+      main: {
+        ...main,
+        risk_signals: kept,
+        legit: 'unclear',
+        bottom_line: 'maybe',
+        legit_reason: 'No verified quote for the risk verdict.',
+      },
+      total: main.risk_signals.length,
+      dropped,
+    };
+  }
+  return { main: { ...main, risk_signals: kept }, total: main.risk_signals.length, dropped };
+}
+
 /**
  * Run both model passes and merge. Exported so the offline eval can use the
  * same path with fixture pay/employer data.
@@ -564,41 +623,57 @@ export async function analyzeFields(
 ): Promise<AnalysisResult | null> {
   if (!isOverviewAvailable()) return null;
   const signals = computeSignals(job, pay, employer, duplicate);
+  const excerpt = redactPhones(redactEmails(buildExcerpt(job.jobDescription ?? '', job.jobTitle ?? '')));
   const mainCall = await callModel(
     AI_MODEL,
     SYSTEM_PROMPT,
-    buildMainUser(job, pay, employer, signals),
+    buildMainUser(job, pay, employer, signals, excerpt),
     AI_MAX_TOKENS,
     'low',
     fetchImpl,
   );
   if (!mainCall) return null;
-  const main = parseMainAnalysis(mainCall.content);
-  if (!main) {
-    console.error('[overview] skipped: invalid main JSON', mainCall.content.slice(0, 800));
+  const parsedMain = parseMainAnalysis(mainCall.content);
+  if (!parsedMain) {
+    console.error('[overview] skipped: invalid main JSON');
     return null;
   }
+  const verified = verifyQuotes(parsedMain, excerpt, signals.hardRisk.length > 0);
+  const main = verified.main;
 
   let escalation: EscalationAnalysis | null = null;
   let escalationCall: CallResult | null = null;
   const escalated = shouldEscalate(main, signals, pay);
   if (escalated) {
-    escalationCall = await callModel(
-      AI_ESCALATION_MODEL,
-      ESCALATION_PROMPT,
-      JSON.stringify({
-        first_pass: main,
-        hard_flags: {
-          risk: signals.hardRisk.map((s) => ({ category: s.category, quote: s.quote, reason: s.reason })),
-          caution: signals.hardCaution.map((s) => ({ category: s.category, quote: s.quote, reason: s.reason })),
-        },
-      }),
-      ESCALATION_MAX_TOKENS,
-      'medium',
-      fetchImpl,
-    );
+    try {
+      escalationCall = await callModel(
+        AI_ESCALATION_MODEL,
+        ESCALATION_PROMPT,
+        JSON.stringify({
+          first_pass: main,
+          hard_flags: {
+            risk: signals.hardRisk.map((s) => ({
+              category: s.category,
+              quote: redactText(s.quote),
+              reason: redactText(s.reason),
+            })),
+            caution: signals.hardCaution.map((s) => ({
+              category: s.category,
+              quote: redactText(s.quote),
+              reason: redactText(s.reason),
+            })),
+          },
+        }),
+        ESCALATION_MAX_TOKENS,
+        'high',
+        fetchImpl,
+      );
+    } catch (err) {
+      if (!(err instanceof TransientAiError)) throw err;
+      console.error('[overview] escalation request failed; capping at caution', err);
+    }
     if (escalationCall) escalation = parseEscalation(escalationCall.content);
-    if (!escalation) console.error('[overview] escalation failed; capping at caution');
+    if (!escalation && escalationCall) console.error('[overview] escalation failed; capping at caution');
   }
 
   const final = merge(main, escalation, escalated, signals);
@@ -616,6 +691,7 @@ export async function analyzeFields(
     analysis,
     usage: { main: mainCall.usage, escalation: escalationCall?.usage ?? null },
     overview: renderOverview(final),
+    quoteStats: { total: verified.total, dropped: verified.dropped },
   };
 }
 
@@ -716,13 +792,15 @@ async function pump(): Promise<void> {
   }
 }
 
+/** Returns false only when a model call produced nothing; skips return true. */
 export async function analyzeJobById(jobDbId: number, force = false): Promise<boolean> {
-  if (!isOverviewAvailable()) return false;
+  if (!isOverviewAvailable()) return true;
   const rows = await db.select().from(jobPostings).where(sql`${jobPostings.id} = ${jobDbId}`).limit(1);
   const job = rows[0];
-  if (!job) return false;
-  if (!force && job.aiAnalysis) return false;
-  if (!force && !(await hasAiMatch(job))) return false;
+  if (!job) return true;
+  if (!force && (job.aiAttempts ?? 0) >= 3) return true;
+  if (!force && job.aiAnalysis) return true;
+  if (!force && !(await hasAiMatch(job))) return true;
 
   const insight = await payInsightFor(job);
   const pay = payContextFor(job, insight);
@@ -736,8 +814,25 @@ export async function analyzeJobById(jobDbId: number, force = false): Promise<bo
   }
   const hash = job.descriptionHash ?? hashDescription(job.jobDescription ?? '');
   const duplicate = await findDuplicate(hash, job.employerId, job.jobId);
-  const result = await analyzeFields(job, pay, employer, duplicate);
-  if (!result) return false;
+  let result: Awaited<ReturnType<typeof analyzeFields>> = null;
+  let retryable = false;
+  try {
+    result = await analyzeFields(job, pay, employer, duplicate);
+  } catch (err) {
+    if (!(err instanceof TransientAiError)) throw err;
+    retryable = true;
+  }
+  if (!result) {
+    if (retryable) {
+      const attempts = job.aiAttempts ?? 0;
+      await db
+        .update(jobPostings)
+        .set({ aiAttempts: sql`COALESCE(${jobPostings.aiAttempts}, 0) + 1` })
+        .where(sql`${jobPostings.id} = ${job.id}`);
+      if (!force && attempts < 2) setTimeout(() => enqueueAnalysis(job.id), 30_000 * 2 ** attempts);
+    }
+    return false;
+  }
 
   await db
     .update(jobPostings)
@@ -747,6 +842,7 @@ export async function analyzeJobById(jobDbId: number, force = false): Promise<bo
       aiVersion: AI_VERSION,
       aiUsage: result.usage,
       aiEscalated: result.analysis.escalated,
+      aiAttempts: 0,
       descriptionHash: job.descriptionHash ?? hash,
     })
     .where(
@@ -775,9 +871,9 @@ export async function enqueuePendingAnalyses(): Promise<void> {
   if (!isOverviewAvailable()) return;
   const byChat = await aiKeywordsByChat();
   if (!byChat) return;
-  // Keyword-filter before filling the queue so unmatched recent jobs cannot
-  // starve real retries. ponytail: scan capped at 2000; add an ai_skipped
-  // marker column if daily job volume ever exceeds that.
+  // Retry failed jobs first, up to 3 attempts, then recent and unprocessed
+  // ones. ponytail: scan capped at 2000; add an ai_skipped marker column if
+  // daily job volume ever exceeds that.
   const rows = await db
     .select({
       id: jobPostings.id,
@@ -787,9 +883,12 @@ export async function enqueuePendingAnalyses(): Promise<void> {
     .from(jobPostings)
     .where(
       sql`${jobPostings.aiAnalysis} IS NULL
-        AND (${jobPostings.isProcessed} = false OR ${jobPostings.createdAt} > now() - interval '2 days')`,
+        AND COALESCE(${jobPostings.aiAttempts}, 0) < 3
+        AND (${jobPostings.isProcessed} = false
+          OR ${jobPostings.createdAt} > now() - interval '2 days'
+          OR COALESCE(${jobPostings.aiAttempts}, 0) > 0)`,
     )
-    .orderBy(desc(jobPostings.createdAt))
+    .orderBy(desc(sql`COALESCE(${jobPostings.aiAttempts}, 0)`), asc(jobPostings.createdAt))
     .limit(2000);
   let queued = 0;
   for (const row of rows) {
@@ -890,12 +989,79 @@ if (require.main === module) {
   check('hard caution floors a likely verdict', merged.legit === 'caution');
   check('bottom line follows the final verdict', merged.bottom_line === 'maybe');
 
+  const oneRisk = merge(
+    { ...main!, legit: 'risk' },
+    { legit: 'unclear', legit_reason: 'x', confidence: 'medium', bottom_line: 'maybe' },
+    true,
+    signals,
+  );
+  check('one risk plus unclear is caution', oneRisk.legit === 'caution');
+
   const rendered = renderOverview({
     ...merged,
     what: '<b>bold</b>',
   });
   check('render keeps six lines', rendered.split('\n').length === 7);
   check('render does not escape yet', rendered.includes('<b>'));
+
+  const quoted = verifyQuotes(
+    {
+      ...main!,
+      risk_signals: [
+        { category: 'fee', quote: 'Pay a $50 training fee' },
+        { category: 'fee', quote: 'invented quote' },
+      ],
+      legit: 'risk',
+    },
+    'Pay a $50 training fee via GCash.',
+    false,
+  );
+  check('unverified quote is dropped', quoted.main.risk_signals.length === 1);
+  check('quote drop is counted', quoted.dropped === 1);
+  const unquoted = verifyQuotes(
+    { ...main!, risk_signals: [{ category: 'fee', quote: 'invented' }], legit: 'risk' },
+    'nothing matches',
+    false,
+  );
+  check('risk without a verified quote is unclear', unquoted.main.legit === 'unclear');
+  const hardRisk = verifyQuotes({ ...main!, risk_signals: [], legit: 'risk' }, 'nothing matches', true);
+  check('hard risk survives an unverified quote', hardRisk.main.legit === 'risk');
+
+  const basePay: PayContext = {
+    raw: '$8/hour',
+    usdHour: 8,
+    usdMonth: 1408,
+    peerLabel: 'test',
+    median: 8,
+    p95: 14,
+    ratio: 1,
+    extreme: false,
+  };
+  const hardRiskSignals: DeterministicSignals = {
+    ...signals,
+    hardRisk: [{ category: 'fee', quote: 'x', level: 'risk', reason: 'x' }],
+  };
+  check(
+    'hard risk does not escalate',
+    !shouldEscalate({ ...main!, legit: 'risk', confidence: 'high' }, hardRiskSignals, basePay),
+  );
+  check(
+    'covered caution does not escalate',
+    !shouldEscalate({ ...main!, legit: 'caution', confidence: 'high' }, signals, basePay),
+  );
+  check(
+    'low-confidence caution escalates',
+    shouldEscalate({ ...main!, legit: 'caution', confidence: 'low' }, signals, basePay),
+  );
+  const cleanSignals: DeterministicSignals = { ...signals, hardCaution: [] };
+  check(
+    'clean likely does not escalate',
+    !shouldEscalate({ ...main!, legit: 'likely', confidence: 'high' }, cleanSignals, basePay),
+  );
+  check(
+    'extreme pay likely escalates',
+    shouldEscalate({ ...main!, legit: 'likely', confidence: 'high' }, cleanSignals, { ...basePay, extreme: true }),
+  );
 
   if (failed === 0) console.log('overview.ts self-check OK');
   else {

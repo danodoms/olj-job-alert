@@ -6,7 +6,7 @@
  */
 import 'dotenv/config';
 import { desc, sql } from 'drizzle-orm';
-import { db, pool } from '../db';
+import { db, migrate, pool } from '../db';
 import { jobPostings } from '../schema';
 import { analyzeJobById, isOverviewAvailable } from '../overview';
 
@@ -22,6 +22,7 @@ async function main(): Promise<void> {
     process.exit(1);
   }
 
+  await migrate();
   const rows = await db
     .select({ id: jobPostings.id })
     .from(jobPostings)

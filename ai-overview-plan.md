@@ -43,7 +43,7 @@ Scope decisions:
 - `deepseek-v4.1-flash` exposes `low`, `high`, and `max` variants.
   `deepseek-v4-pro` exposes `high` and `max`. Use `low` for the main call and
   `high` for escalation. Do not send `medium` to the pro model.
-- Confirm the timeout. Analysis runs off the alert path, so use 20 seconds, not
+- Confirm the timeout. Analysis runs off the alert path, so use 45 seconds, not
   6. A shorter timeout mostly adds missing blocks.
 - PostgreSQL reachable for the schema bootstrap.
 - Backfill `description_hash` for existing rows before enabling duplicate
@@ -183,8 +183,9 @@ Validation:
   trusted.
 - Any failure, including `finish_reason === "length"`: drop the block, send the
   alert normally, log the reason. No blind retry.
-- Retry only when a 400 explicitly names `reasoning_effort`. Retry 429/5xx at
-  the queue level with backoff, twice maximum. Never retry invalid JSON.
+- Retry only when a 400 explicitly names `reasoning_effort`. Retry network errors
+  and 429/5xx at the queue level with backoff, twice maximum. Never retry
+  invalid JSON or a timeout.
 
 ## Prompt
 
@@ -424,7 +425,8 @@ job**, or **$0.40 per 1000 jobs**. Cache reads are $0.003/M.
 Escalation on `deepseek-v4-pro` costs $0.66/M input and $1.98/M output. About
 700 input and 150 output tokens is **$0.00076 per escalated job**. At a 20%
 escalation rate, expect **$0.55 per 1000 jobs**; at 50%, about **$0.78**. Budget
-**$0.40–1.20 per 1000** including retries.
+**$0.40–1.20 per 1000** including retries. High reasoning may add billed output
+tokens; treat the budget as a floor, not a cap.
 
 Levers:
 
@@ -530,7 +532,7 @@ Then enqueue those rows with a one-off script, not `reanalyze:overview`.
 3. Worker exits immediately if no AI-enabled chat has a matching keyword.
 4. Worker loads the cached employer check or fetches it once.
 5. Worker computes deterministic signals, the pay context, and duplicates.
-6. Worker calls the main model once with a 20 second timeout.
+6. Worker calls the main model once with a 45 second timeout.
 7. Worker validates the JSON and verifies every model risk quote against the
    description.
 8. Worker escalates only under the rules above, merges, and stores
@@ -539,8 +541,8 @@ Then enqueue those rows with a one-off script, not `reanalyze:overview`.
 10. If analysis is missing or failed, the alert goes out without the block.
 11. On boot, enqueue up to 100 recent unprocessed or failed matching jobs. Use
     `reanalyze:overview` for older rows.
-12. On 429/5xx, requeue with exponential backoff, twice maximum. Do not retry
-    invalid JSON or a timeout.
+12. On network errors or 429/5xx, requeue with exponential backoff, twice
+    maximum. Do not retry invalid JSON or a timeout.
 
 Queue concurrency: 2. At current volume this keeps alerts instant without
 flooding the provider.
@@ -602,8 +604,8 @@ AI_TIMEOUT_MS=45000
 - Cap description at 2500 characters and every output string at 160.
 - Cap the alert AI block at 700 visible characters. Cap `/job` at 3500 and split
   or trim before Telegram's 4096 limit.
-- Retry only 429/5xx, twice. No retry after invalid JSON, schema failure, or
-  timeout.
+- Retry network errors and 429/5xx, twice. No retry after invalid JSON, schema
+  failure, timeout, or another 4xx.
 - `High risk` requires a verified hard flag or two passes agreeing. One call
   cannot accuse a legit employer.
 - Feedback is stored, never displayed publicly.

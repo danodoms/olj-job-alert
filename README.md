@@ -138,8 +138,13 @@ that it is unavailable.
 
 Analysis runs after the alert is queued, so the first alert may arrive without
 the block. Only jobs matching an AI-enabled chat's keywords are analyzed. Job
-text is sent to the model provider. Email local parts are redacted; phone
-numbers are not.
+text is sent to the model provider. Email local parts and phone numbers are
+redacted.
+
+Network errors and 429/5xx are retried twice with backoff. Timeouts, bad JSON,
+and other 4xx responses are not retried. Model risk quotes are checked against
+the redacted excerpt; unverified quotes are dropped, and a risk verdict without
+one is downgraded.
 
 Force regeneration after a prompt change, without re-alerting:
 

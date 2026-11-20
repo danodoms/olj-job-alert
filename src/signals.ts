@@ -115,15 +115,34 @@ const ROLE_NOUNS = [
   'va',
 ];
 
-function affirmed(text: string, pattern: RegExp): string | null {
+function affirmed(
+  text: string,
+  pattern: RegExp,
+  keep?: (before: string, match: string, after: string) => boolean,
+): string | null {
   const re = new RegExp(pattern.source, pattern.flags.includes('g') ? pattern.flags : `${pattern.flags}g`);
   for (const match of text.matchAll(re)) {
     const start = match.index ?? 0;
     const before = text.slice(Math.max(0, start - 70), start);
     if (NEGATION.test(before)) continue;
-    return match[0].slice(0, 160);
+    const matched = match[0];
+    const after = text.slice(start + matched.length, start + matched.length + 45).split(/[.;]/)[0] ?? '';
+    if (keep && !keep(before, matched, after)) continue;
+    return matched.slice(0, 160);
   }
   return null;
+}
+
+/** True when the surrounding text says the employer pays or no fee is owed. */
+function feeCovered(before: string, match: string, after: string): boolean {
+  const lead = (before.split(/[.;]\s*/).pop() ?? '') + match;
+  if (
+    /\b(?:company|employer)\s+(?:will\s+|has\s+|have\s+|fully\s+|usually\s+)?(?:covers?|pays?|paid|reimburses?|refunds?|waives?|provides?)\b/i.test(lead) ||
+    /\bwe\s+(?:will\s+|has\s+|have\s+|fully\s+|usually\s+)?(?:cover|pay|paid|reimburse|refund|waive|provide)\b/i.test(lead)
+  ) {
+    return true;
+  }
+  return /\b(?:none|not required|waived|reimbursed|refunded|covered by (?:the )?(?:company|employer)|paid by (?:the )?(?:company|employer)|company (?:covers|pays))\b/i.test(after);
 }
 
 /** Lowercase, strip punctuation, collapse whitespace, then SHA-256 the first 4000 chars. */
@@ -142,6 +161,13 @@ export function redactEmails(text: string): string {
     /\b[A-Z0-9._%+-]+@([A-Z0-9.-]+\.[A-Z]{2,})\b/gi,
     (_match, domain: string) => `***@${domain}`,
   );
+}
+
+/** Redact PH mobile and international phone numbers, keeping the channel text. */
+export function redactPhones(text: string): string {
+  return text
+    .replace(/(?:\+?63|0)\s?9\d{2}[\s.-]?\d{3}[\s.-]?\d{4}\b/g, '***')
+    .replace(/\+\d{1,3}[\s.-]?\d{2,4}[\s.-]?\d{3,4}[\s.-]?\d{3,4}\b/g, '***');
 }
 
 function extractEmail(text: string): { address: string | null; free: boolean } {
@@ -194,6 +220,7 @@ function textFlags(description: string): { hard: RiskSignal[]; soft: SoftSignal[
   const fee = affirmed(
     description,
     /\b(?:pay|send|requires?|charge|collect|ask(?:ing)? for)\b[^.\n]{0,40}\b(?:fee|deposit)\b|\b(?:training|equipment|registration|application)\s+fee\b/i,
+    (before, match, after) => !feeCovered(before, match, after),
   );
   if (fee) addHard('fee', fee, 'Upfront fee or deposit requested.');
 
@@ -212,6 +239,7 @@ function textFlags(description: string): { hard: RiskSignal[]; soft: SoftSignal[
   const scheme = affirmed(
     description,
     /\b(?:gift card|wire transfer|money order|overpayment)\b/i,
+    (_before, _match, after) => !/\b(?:not (?:required|accepted|allowed)|none)\b/i.test(after),
   );
   if (scheme) addHard('payment', scheme, 'Gift card, wire, or overpayment scheme.');
 
@@ -219,13 +247,15 @@ function textFlags(description: string): { hard: RiskSignal[]; soft: SoftSignal[
   // money that goes to the employer, or buying the employer's own package.
   const equipment = affirmed(
     description,
-    /\b(?:equipment|laptop|computer|software)\s+(?:fee|deposit)\b|\b(?:pay|send|deposit|reimburse)\b[^.\n]{0,20}\b(?:us|our (?:company|store|supplier))\b[^.\n]{0,20}\$\s?\d[\d,]*|\b(?:pay|send|deposit|reimburse)\b[^.\n]{0,20}\$\s?\d[\d,]*[^.\n]{0,40}\b(?:to|into)\s+(?:us|our (?:company|store|supplier))\b|\b(?:buy|purchase|pay for)\b[^.\n]{0,40}\b(?:(?:the|our|their) company(?:'s)?\s+(?:software|equipment|laptop|computer|package|kit)|from (?:us|our (?:company|store|supplier)))\b/i,
+    /\b(?:equipment|laptop|computer|software)\s+(?:fee|deposit)\b|\b(?:pay|send|deposit|reimburse)\b[^.\n]{0,20}\b(?:us|our (?:company|store|supplier))\b[^.\n]{0,20}\$\s?\d[\d,]*(?:\.\d{2})?|\b(?:pay|send|deposit|reimburse)\b[^.\n]{0,20}\$\s?\d[\d,]*(?:\.\d{2})?[^.\n]{0,40}\b(?:to|into)\s+(?:us|our (?:company|store|supplier))\b|\b(?:buy|purchase|pay for)\b[^.\n]{0,40}\b(?:(?:the|our|their) company(?:'s)?\s+(?:software|equipment|laptop|computer|package|kit)|from (?:us|our (?:company|store|supplier)))\b|\b(?:you|applicant|candidate)\b[^.\n]{0,30}\b(?:buy|purchase|pay for)\b[^.\n]{0,30}\b(?:the\s+)?required\s+(?:software|equipment|laptop|computer|training)\s+(?:package|kit)\b/i,
+    (before, match, after) => !feeCovered(before, match, after),
   );
   if (equipment) addHard('fee', equipment, 'Equipment payment requested.');
 
   const ambiguousFee = affirmed(
     description,
     /\b(?:application|registration|processing|training|equipment)\s+fee\b/i,
+    (before, match, after) => !feeCovered(before, match, after),
   );
   if (ambiguousFee && !hard.some((s) => s.category === 'fee')) {
     soft.push({ category: 'fee', quote: ambiguousFee });
@@ -605,8 +635,68 @@ if (require.main === module) {
     check(`"${text}" is a hard fee`, reverse.hardRisk.some((s) => s.category === 'fee'));
   }
 
+  for (const text of [
+    'Equipment fee: none.',
+    'Equipment fee is not required.',
+    'Equipment deposit is waived.',
+    'Equipment fee is covered by the company.',
+    'The company covers the equipment fee.',
+    'The company pays the training fee.',
+    'Training fee: none.',
+  ]) {
+    const covered = computeSignals(job(`${text} Requirements: typing. About us: firm.`), plainPay, null, noDuplicate);
+    check(`"${text}" is not a hard fee`, !covered.hardRisk.some((s) => s.category === 'fee'));
+  }
+  for (const text of ['Gift card payment is not required.', 'Wire transfer: not accepted.']) {
+    const denied = computeSignals(job(`${text} Requirements: typing. About us: firm.`), plainPay, null, noDuplicate);
+    check(`"${text}" is not a hard scheme`, !denied.hardRisk.some((s) => s.category === 'payment'));
+  }
+  const requiredPackage = computeSignals(
+    job('You must purchase the required software package for $120 before starting. Requirements: typing. About us: firm.'),
+    plainPay,
+    null,
+    noDuplicate,
+  );
+  check('required software package is a hard fee', requiredPackage.hardRisk.some((s) => s.category === 'fee'));
+  const cents = computeSignals(
+    job('Send $120.50 to us for the equipment. Requirements: typing. About us: firm.'),
+    plainPay,
+    null,
+    noDuplicate,
+  );
+  check(
+    'cents payment quote keeps the full amount',
+    cents.hardRisk.some((s) => s.category === 'fee' && s.quote.includes('$120.50')),
+  );
+  const candidatePaid = computeSignals(
+    job('You pay the training fee before starting. Requirements: typing. About us: firm.'),
+    plainPay,
+    null,
+    noDuplicate,
+  );
+  check('candidate-paid fee is still hard', candidatePaid.hardRisk.some((s) => s.category === 'fee'));
+  const candidateCovers = computeSignals(
+    job('The equipment fee is covered by the candidate. Requirements: typing. About us: firm.'),
+    plainPay,
+    null,
+    noDuplicate,
+  );
+  check('candidate-covered fee is still hard', candidateCovers.hardRisk.some((s) => s.category === 'fee'));
+  const employerRequired = computeSignals(
+    job('The company requires you to pay the training fee. Requirements: typing. About us: firm.'),
+    plainPay,
+    null,
+    noDuplicate,
+  );
+  check('employer-required fee is still hard', employerRequired.hardRisk.some((s) => s.category === 'fee'));
+
   check('hash is stable', hashDescription('A  role!') === hashDescription('a role'));
   check('email redaction keeps domain', redactEmails('Mail me@example.com') === 'Mail ***@example.com');
+  check(
+    'phone redaction keeps channel text',
+    redactPhones('Call 0917 123 4567 or +63 917 123 4567.') === 'Call *** or ***.',
+  );
+  check('international phone redaction', redactPhones('Call +1 555 123 4567.') === 'Call ***.');
 
   if (failed === 0) console.log('signals.ts self-check OK');
   else {

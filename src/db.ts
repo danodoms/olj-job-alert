@@ -25,6 +25,7 @@ ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS ai_analysis jsonb;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS ai_version int;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS ai_usage jsonb;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS ai_escalated boolean DEFAULT false;
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS ai_attempts int DEFAULT 0;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS employer text;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS employer_id bigint;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS employer_logo text;
