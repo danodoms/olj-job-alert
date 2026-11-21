@@ -42,6 +42,21 @@ CREATE TABLE IF NOT EXISTS user_settings (
   ai_overview boolean NOT NULL DEFAULT false,
   updated_at timestamptz DEFAULT now()
 );
+ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS resume_text text;
+ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS resume_hash text;
+ALTER TABLE user_settings ADD COLUMN IF NOT EXISTS resume_updated_at timestamptz;
+CREATE TABLE IF NOT EXISTS job_fits (
+  id serial PRIMARY KEY,
+  chat_id bigint NOT NULL,
+  job_id bigint NOT NULL,
+  resume_hash text NOT NULL,
+  fit_version int NOT NULL,
+  analysis jsonb NOT NULL,
+  usage jsonb,
+  created_at timestamptz DEFAULT now(),
+  UNIQUE (chat_id, job_id)
+);
+CREATE INDEX IF NOT EXISTS idx_job_fits_job_id ON job_fits(job_id);
 CREATE TABLE IF NOT EXISTS employer_checks (
   employer_id bigint PRIMARY KEY,
   name text,

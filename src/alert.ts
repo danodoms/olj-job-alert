@@ -4,18 +4,55 @@
  */
 import type { InlineKeyboardMarkup } from 'grammy/types';
 import { formatPay, formatVerdict, verdictEmoji, type ParsedPay } from './pay';
-import { BOTTOM_LABEL, LEGIT_EMOJI, type FinalAnalysis, type JobAnalysis } from './overview';
+import {
+  BOTTOM_LABEL,
+  LEGIT_EMOJI,
+  fitLabel,
+  type FinalAnalysis,
+  type FitAnalysis,
+  type JobAnalysis,
+} from './overview';
 import type { PayInsight } from './signals';
 import { jobPostings } from './schema';
 import type { KeywordMatch } from './match';
 import { defangUrls, escapeHtml, makeExcerpt, visibleLength } from './utils';
 
 const AI_BLOCK_CAP = 700;
+/** Overview must leave room for the fit block, so it shrinks when a fit is shown. */
+const AI_BLOCK_WITH_FIT_CAP = 460;
+const FIT_BLOCK_CAP = 240;
+/** Largest plain-text strength or gap line; keeps two entries inside the fit cap. */
+const FIT_LINE_MAX = 100;
 const CAPTION_BUDGET = 980;
 const CAPTION_LIMIT = 1000;
 const EXCERPT_MAX = 500;
 
-function aiBlock(final: FinalAnalysis): string | null {
+/** Kept separate from the score so a long fit is trimmed before the score line. */
+function fitLines(fit: FitAnalysis, strengthsCount: number, gapsCount: number): string[] {
+  const head =
+    fit.score === null
+      ? '🎯 Resume fit: not enough info'
+      : `🎯 Resume fit: ${fit.score}/10 ${fitLabel(fit.score)}`;
+  const lines = [head];
+  const strengths = fit.strengths.slice(0, strengthsCount).map((s) => s.slice(0, FIT_LINE_MAX));
+  const gaps = fit.gaps.slice(0, gapsCount).map((g) => g.slice(0, FIT_LINE_MAX));
+  if (strengths.length > 0) lines.push(`+ ${strengths.join(', ')}`);
+  if (gaps.length > 0) lines.push(`- ${gaps.join(', ')}`);
+  return lines;
+}
+
+function fitBlock(fit: FitAnalysis): string {
+  const fits = (counts: [number, number]) =>
+    visibleLength(fitLines(fit, counts[0], counts[1]).join('\n')) <= FIT_BLOCK_CAP;
+  const counts: [number, number] = fits([2, 2]) ? [2, 2] : fits([2, 1]) ? [2, 1] : fits([1, 1]) ? [1, 1] : [0, 0];
+  const lines = fitLines(fit, counts[0], counts[1]);
+  return [
+    `<b>${escapeHtml(lines[0])}</b>`,
+    ...lines.slice(1).map((line) => escapeHtml(defangUrls(line))),
+  ].join('\n');
+}
+
+function aiBlock(final: FinalAnalysis, fit: FitAnalysis | null): string | null {
   const core = [
     '<b>Bottom line:</b> ' + BOTTOM_LABEL[final.bottom_line],
     `<b>Legit:</b> ${LEGIT_EMOJI[final.legit]} — ${escapeHtml(defangUrls(final.legit_reason))}`,
@@ -32,11 +69,13 @@ function aiBlock(final: FinalAnalysis): string | null {
   const render = (lines: string[]) =>
     `<blockquote>🤖 <b>AI overview</b>\n${core}${lines.map((l) => `\n${l}`).join('')}</blockquote>`;
 
+  const cap = fit ? AI_BLOCK_WITH_FIT_CAP : AI_BLOCK_CAP;
   let kept = optional;
-  while (kept.length > 0 && visibleLength(render(kept)) > AI_BLOCK_CAP) {
+  while (kept.length > 0 && visibleLength(render(kept)) > cap) {
     kept = kept.slice(0, -1);
   }
-  return render(kept);
+  const overview = render(kept);
+  return fit ? `${overview}\n${fitBlock(fit)}` : overview;
 }
 
 export function alertKeyboard(jobId: number, hasAi: boolean): InlineKeyboardMarkup {
@@ -112,7 +151,7 @@ export function buildAlertCaption(
     );
   }
 
-  const block = analysis ? aiBlock(analysis.final) : null;
+  const block = analysis ? aiBlock(analysis.final, analysis.fit ?? null) : null;
   if (block) tail.push('', block);
 
   const room = CAPTION_BUDGET - visibleLength([...head, ...tail].join('\n'));
@@ -236,6 +275,56 @@ if (require.main === module) {
       JSON.stringify(['job:123456', 'fb:helpful:123456', 'fb:unhelpful:123456', 'fb:report:123456']),
   );
   check('no ai buttons without ai', alertKeyboard(123456, false).inline_keyboard.length === 1);
+
+  const fitAnalysis = {
+    ...analysis,
+    fit: {
+      score: 8,
+      strengths: ['5 yrs React', 'E-commerce dashboards'],
+      gaps: ['No Amazon', 'No PPC'],
+      note: 'Strong match.',
+    },
+  } as JobAnalysis;
+  const withFit = buildAlertCaption(job, insight, matches, fitAnalysis);
+  const fitPart = withFit.caption.slice(withFit.caption.indexOf('🎯 Resume fit'));
+  check('fit renders score and label', withFit.caption.includes('8/10 Strong'));
+  check('fit renders strengths', withFit.caption.includes('+ 5 yrs React'));
+  check('fit renders gaps', withFit.caption.includes('- No Amazon'));
+  check('fit block under 240', visibleLength(fitPart) <= FIT_BLOCK_CAP);
+  check('fit caption under limit', visibleLength(withFit.caption) <= CAPTION_LIMIT);
+  const overviewPart = withFit.caption.slice(
+    withFit.caption.indexOf('<blockquote>'),
+    withFit.caption.indexOf('</blockquote>') + '</blockquote>'.length,
+  );
+  check('overview shrinks for fit', visibleLength(overviewPart) <= AI_BLOCK_WITH_FIT_CAP);
+
+  const noInfo = buildAlertCaption(
+    job,
+    insight,
+    matches,
+    { ...analysis, fit: { score: null, strengths: [], gaps: [], note: 'Thin listing.' } } as JobAnalysis,
+  );
+  check('null score renders no-info line', noInfo.caption.includes('Resume fit: not enough info'));
+
+  const longFit = buildAlertCaption(
+    job,
+    insight,
+    matches,
+    {
+      ...analysis,
+      fit: {
+        score: 6,
+        strengths: ['s'.repeat(160), 't'.repeat(160)],
+        gaps: ['g'.repeat(160), 'h'.repeat(160)],
+        note: '',
+      },
+    } as JobAnalysis,
+  );
+  const longFitPart = longFit.caption.slice(longFit.caption.indexOf('🎯 Resume fit'));
+  check('long fit stays under 240', visibleLength(longFitPart) <= FIT_BLOCK_CAP);
+  check('long fit keeps the score line', longFitPart.startsWith('🎯 Resume fit: 6/10 Partial'));
+  check('long fit caption under limit', visibleLength(longFit.caption) <= CAPTION_LIMIT);
+  check('no fit block without fit', !withAi.caption.includes('Resume fit'));
 
   if (failed === 0) console.log('alert.ts self-check OK');
   else process.exit(1);

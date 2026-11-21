@@ -78,8 +78,30 @@ export const userSubscriptions = pgTable(
 export const userSettings = pgTable('user_settings', {
   chatId: bigint('chat_id', { mode: 'number' }).primaryKey(),
   aiOverview: boolean('ai_overview').notNull().default(false),
+  resumeText: text('resume_text'),
+  resumeHash: text('resume_hash'),
+  resumeUpdatedAt: timestamp('resume_updated_at', { withTimezone: true }),
   updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
 });
+
+/** Cached overview+fit result per chat and job. Shared rows live in job_postings. */
+export const jobFits = pgTable(
+  'job_fits',
+  {
+    id: serial('id').primaryKey(),
+    chatId: bigint('chat_id', { mode: 'number' }).notNull(),
+    jobId: bigint('job_id', { mode: 'number' }).notNull(),
+    resumeHash: text('resume_hash').notNull(),
+    fitVersion: integer('fit_version').notNull(),
+    analysis: jsonb('analysis').notNull(),
+    usage: jsonb('usage'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    uniq: uniqueIndex('job_fits_chat_id_job_id_unique').on(table.chatId, table.jobId),
+    jobIdx: index('idx_job_fits_job_id').on(table.jobId),
+  }),
+);
 
 /** Cached OLJ employer search result, reused for 7 days. */
 export const employerChecks = pgTable('employer_checks', {

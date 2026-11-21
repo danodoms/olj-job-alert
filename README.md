@@ -118,9 +118,11 @@ See `spec.md` for detailed technical specifications and implementation details.
 
 Users enable an AI estimate per matched job with `/ai on`. It is off by default,
 and `/ai off` disables it. An analysis is generated once per job by a background
-worker, cached on the job row, and shared by every opted-in chat. Alerts never
-wait for the model; a missing analysis simply omits the block. `/job <id>` shows
-the full analysis for a job you were alerted about, and the alert buttons store
+worker, cached on the job row, and shared by every opted-in chat. Shared alerts
+wait at most 120 seconds for a shared overview, then send without it. Resume
+alerts wait only for their own fit, so one pending fit never holds other
+subscribers. `/job <id>` shows the full analysis
+for a job you were alerted about, and the alert buttons store
 helpful/unhelpful/report feedback.
 
 Add these to `.env`:
@@ -131,6 +133,7 @@ AI_MODEL=deepseek-v4.1-flash
 AI_ESCALATION_MODEL=deepseek-v4-pro
 AI_BASE_URL=https://opencode.ai/zen/go/v1
 AI_TIMEOUT_MS=45000
+RESUME_FIT_ENABLED=true
 ```
 
 `OPENCODE_API_KEY` absent means the feature stays dormant and `/ai on` replies
@@ -163,6 +166,27 @@ npm run eval:overview
 
 The fixtures in `evals/overview-cases.json` are synthetic placeholders. Replace
 them with labeled real listings before using the metrics as a benchmark.
+
+## Resume fit (opt-in)
+
+A chat can paste a plain-text resume with `/resume` (200-4,000 characters, one
+message, private chat only). While a resume is saved and AI is on, each matching
+alert also gets a 1-10 skills-fit score with two strengths and two gaps. The
+score is a skills match, never a legitimacy verdict. `/resume status` shows the
+saved state, `/resume clear` removes the text and cached fits. Saving a resume
+turns AI on for that chat; `/ai off` still overrides. Re-pasting an unchanged
+resume leaves the AI setting alone.
+
+Resume text is stored raw in Postgres until cleared, and is sent to the model
+for fit checks after emails and phone numbers are redacted. It is never echoed
+by the bot. Fits are cached per chat and job in `job_fits`; a resume change
+invalidates that chat's cached fits. Save and clear delete the old rows.
+
+Alerts wait up to 180 seconds for a fit, then send without it. A pending fit
+holds only the resume recipients for that job. Saved fits still show when AI is
+not configured; new fits need a model key.
+`RESUME_FIT_ENABLED=false` disables fit generation and display without deleting
+saved resumes.
 
 ---
 

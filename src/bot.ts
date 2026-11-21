@@ -1,14 +1,35 @@
 import { Bot, type Context } from 'grammy';
 import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from './db';
-import { jobPostings, userSubscriptions, userSettings, notifications, overviewFeedback } from './schema';
+import {
+  jobFits,
+  jobPostings,
+  userSubscriptions,
+  userSettings,
+  notifications,
+  overviewFeedback,
+} from './schema';
 import {
   AI_VERSION,
   BOTTOM_LABEL,
   LEGIT_EMOJI,
+  clearFitsForChat,
+  fitLabel,
+  isFitEnabled,
   isOverviewAvailable,
+  readFitForChat,
   type JobAnalysis,
 } from './overview';
+import { forgetFitWait } from './notifier';
+import {
+  RESUME_MAX,
+  RESUME_MIN,
+  RESUME_PRIVACY_NOTE,
+  isPrivateChat,
+  resumeHash,
+  resumeStateText,
+  validateResume,
+} from './resume';
 import { defangUrls, escapeHtml, makeExcerpt, visibleLength } from './utils';
 import { formatPay } from './pay';
 import { alertKeyboard, hoursLabel, parsedPayOf } from './alert';
@@ -30,10 +51,39 @@ const HELP = [
   '/keywordremove <k1, k2> — remove keywords',
   '/mysubs — show your keywords and activity',
   '/job <jobId> — full AI analysis for an alerted job',
-  '/ai on|off — enable or disable the AI overview',
+  '/ai on|off — enable or disable the AI overview and resume fit',
+  '/resume — add, view, or clear your resume (max 4,000 chars)',
   '/unsub — remove all keywords',
   '/help — show this message',
 ].join('\n');
+
+/** Keep in sync with bot.command: lets a resume paste start with an unknown slash word. */
+const KNOWN_COMMAND =
+  /^\/(?:start|help|ai|resume|job|keywordsub|keywordadd|keywordremove|mysubs|unsub)(?:@\w+)?(?:\s|$)/i;
+
+/** A pending resume paste, in memory only. Restart loses it. */
+const pendingResume = new Map<number, number>();
+const RESUME_PENDING_TTL_MS = 15 * 60_000;
+
+function isResumePending(chatId: number): boolean {
+  const at = pendingResume.get(chatId);
+  if (at === undefined) return false;
+  if (Date.now() - at > RESUME_PENDING_TTL_MS) {
+    pendingResume.delete(chatId);
+    return false;
+  }
+  return true;
+}
+
+/** Any known command except /resume cancels a pending paste before it can swallow text. */
+bot.use((ctx, next) => {
+  const text = ctx.message?.text ?? '';
+  const chatId = ctx.chat?.id;
+  if (chatId && KNOWN_COMMAND.test(text) && !/^\/resume\b/.test(text) && !/^\/resume@/.test(text)) {
+    pendingResume.delete(chatId);
+  }
+  return next();
+});
 
 async function getAiEnabled(chatId: number): Promise<boolean> {
   const rows = await db
@@ -52,6 +102,30 @@ async function setAiEnabled(chatId: number, enabled: boolean): Promise<void> {
       target: userSettings.chatId,
       set: { aiOverview: enabled, updatedAt: new Date() },
     });
+}
+
+/** Notice for the automatic AI opt-in on resume save. */
+function aiOnNotice(): string {
+  if (!isFitEnabled()) {
+    return 'AI overview turned ON. Fit checks are disabled by the operator. /ai off still overrides.';
+  }
+  return isOverviewAvailable()
+    ? 'AI overview turned ON so fit checks can run. /ai off still overrides.'
+    : 'AI overview turned ON. Fit checks start when AI is configured. /ai off still overrides.';
+}
+
+async function getResumeState(chatId: number) {
+  const [row] = await db
+    .select({
+      resumeText: userSettings.resumeText,
+      resumeHash: userSettings.resumeHash,
+      resumeUpdatedAt: userSettings.resumeUpdatedAt,
+      aiOverview: userSettings.aiOverview,
+    })
+    .from(userSettings)
+    .where(eq(userSettings.chatId, chatId))
+    .limit(1);
+  return row ?? null;
 }
 
 function parseKeywords(raw: string): string[] {
@@ -111,6 +185,70 @@ bot.command('ai', async (ctx) => {
   await ctx.reply('AI overview: OFF');
 });
 
+bot.command('resume', async (ctx) => {
+  const chatId = ctx.chat?.id;
+  if (!chatId) return;
+  if (!isPrivateChat(ctx.chat?.type)) {
+    await ctx.reply('DM the bot to add a resume.');
+    return;
+  }
+
+  const arg = (ctx.match ?? '').trim().toLowerCase();
+  const state = await getResumeState(chatId);
+
+  if (arg === 'status') {
+    const lines = [resumeStateText(state?.resumeText ?? null, state?.resumeUpdatedAt ?? null)];
+    const fitOn = Boolean(isFitEnabled() && state?.aiOverview && state?.resumeText);
+    const generating = fitOn && isOverviewAvailable();
+    lines.push(
+      `Fit: ${generating ? 'ON' : fitOn ? 'ON (cached only; AI not configured)' : 'OFF'}`,
+    );
+    if (!isFitEnabled()) lines.push('Fit checks are disabled by the operator.');
+    else if (fitOn && !isOverviewAvailable()) {
+      lines.push('Saved fits still show. New fits need AI configured.');
+    }
+    if (isResumePending(chatId)) lines.push('Waiting for resume text (200-4,000 chars).');
+    await ctx.reply(lines.join('\n'));
+    return;
+  }
+
+  if (arg === 'clear') {
+    try {
+      await db.transaction(async (tx) => {
+        await tx
+          .update(userSettings)
+          .set({ resumeText: null, resumeHash: null, resumeUpdatedAt: null, updatedAt: new Date() })
+          .where(eq(userSettings.chatId, chatId));
+        await tx.delete(jobFits).where(eq(jobFits.chatId, chatId));
+      });
+    } catch (err) {
+      console.error(
+        '[resume] clear failed:',
+        (err as { code?: string }).code ?? (err as Error).name ?? 'unknown',
+      );
+      await ctx.reply('Could not clear your resume. Try again.');
+      return;
+    }
+    pendingResume.delete(chatId);
+    clearFitsForChat(chatId);
+    forgetFitWait(chatId);
+    await ctx.reply('Resume and saved fit results removed. AI setting unchanged.');
+    return;
+  }
+
+  if (arg) {
+    pendingResume.delete(chatId);
+    await ctx.reply('Usage:\n/resume — paste a resume\n/resume status\n/resume clear');
+    return;
+  }
+
+  pendingResume.set(chatId, Date.now());
+  await ctx.reply(
+    `${resumeStateText(state?.resumeText ?? null, state?.resumeUpdatedAt ?? null)}\n\n` +
+      `Paste your resume as one message. ${RESUME_MIN}-${RESUME_MAX} characters. ` +
+      'Send /help to cancel the paste. /resume clear deletes your saved resume.',
+  );
+});
 const JOB_DETAIL_CAP = 3500;
 const MESSAGE_LIMIT = 4096;
 
@@ -136,11 +274,13 @@ async function buildJobDetail(chatId: number, jobId: number): Promise<DetailResu
     .where(eq(jobPostings.jobId, jobId))
     .limit(1);
   if (!job) return { ok: false, reason: 'no_alert' };
-  if (!job.aiAnalysis || job.aiVersion !== AI_VERSION) {
+  const fitAnalysis = await readFitForChat(chatId, jobId);
+  const shared = job.aiAnalysis && job.aiVersion === AI_VERSION ? (job.aiAnalysis as JobAnalysis) : null;
+  const analysis = fitAnalysis ?? shared;
+  if (!analysis) {
     return { ok: false, reason: job.aiAnalysis ? 'outdated' : 'no_analysis' };
   }
 
-  const analysis = job.aiAnalysis as JobAnalysis;
   const final = analysis.final;
   const meta = [job.employer, job.typeOfWork, hoursLabel(job.hoursPerWeek)]
     .map((part) => part?.replace(/\s+/g, ' ').trim())
@@ -172,23 +312,43 @@ async function buildJobDetail(chatId: number, jobId: number): Promise<DetailResu
   lines.push(`<b>Watch:</b> ${escapeHtml(defangUrls(final.watch))}`);
   if (final.ask.length > 0) lines.push(`<b>Ask:</b> ${escapeHtml(defangUrls(final.ask.join(' ')))}`);
 
-  const employer = analysis.employer;
-  lines.push('', '<b>Employer record</b>');
-  if (!employer) {
-    lines.push('No employer record available');
-  } else if (!employer.found) {
-    lines.push('Not found in OLJ records');
-  } else {
-    lines.push(`Name: ${escapeHtml(employer.name ?? 'Not stated')}`);
-    lines.push(
-      `Paid active: ${employer.paidActive === null ? 'Unknown' : employer.paidActive ? 'Yes' : 'No'}`,
+  const fit = analysis.fit;
+  const fitLines: string[] = [];
+  if (fit) {
+    fitLines.push('🎯 <b>Resume fit</b>');
+    fitLines.push(
+      fit.score === null ? 'Not enough info to score.' : `${fit.score}/10 ${fitLabel(fit.score)}`,
     );
-    lines.push(`Complaints: ${employer.complaints ?? 'Unknown'}`);
-    lines.push(`Posts: ${employer.postCount ?? 'Unknown'} (${employer.newPostCount ?? 0} new)`);
+    if (fit.strengths.length > 0) {
+      fitLines.push(`+ ${fit.strengths.map((s) => escapeHtml(defangUrls(s))).join(', ')}`);
+    }
+    if (fit.gaps.length > 0) {
+      fitLines.push(`- ${fit.gaps.map((g) => escapeHtml(defangUrls(g))).join(', ')}`);
+    }
+    if (fit.note) fitLines.push(`Note: ${escapeHtml(defangUrls(fit.note))}`);
+    fitLines.push('<i>Uses your saved resume.</i>');
   }
 
-  lines.push('', '<i>AI estimate. Verify before sharing documents.</i>');
-  const main = lines.join('\n');
+  const tailLines: string[] = ['', '<b>Employer record</b>'];
+  const employer = analysis.employer;
+  if (!employer) {
+    tailLines.push('No employer record available');
+  } else if (!employer.found) {
+    tailLines.push('Not found in OLJ records');
+  } else {
+    tailLines.push(`Name: ${escapeHtml(employer.name ?? 'Not stated')}`);
+    tailLines.push(
+      `Paid active: ${employer.paidActive === null ? 'Unknown' : employer.paidActive ? 'Yes' : 'No'}`,
+    );
+    tailLines.push(`Complaints: ${employer.complaints ?? 'Unknown'}`);
+    tailLines.push(`Posts: ${employer.postCount ?? 'Unknown'} (${employer.newPostCount ?? 0} new)`);
+  }
+
+  tailLines.push('', '<i>AI estimate. Verify before sharing documents.</i>');
+
+  const buildMain = () =>
+    [...lines, ...(fitLines.length > 0 ? ['', ...fitLines] : []), ...tailLines].join('\n');
+  let main = buildMain();
 
   const signals = analysis.signals;
   const risks = [
@@ -206,9 +366,11 @@ async function buildJobDetail(chatId: number, jobId: number): Promise<DetailResu
     .filter(Boolean)
     .join('\n\n');
   while (visibleLength(`${main}\n\n${evidence}`) > JOB_DETAIL_CAP) {
-    if (gapLines.length > 0) gapLines = gapLines.slice(0, -1);
+    if (fitLines.length > 2) fitLines.pop();
+    else if (gapLines.length > 0) gapLines = gapLines.slice(0, -1);
     else if (riskLines.length > 0) riskLines = riskLines.slice(0, -1);
     else break;
+    main = buildMain();
     evidence = [evidenceBlock('Risk quotes', riskLines), evidenceBlock('Gaps', gapLines)]
       .filter(Boolean)
       .join('\n\n');
@@ -408,8 +570,12 @@ bot.command('mysubs', async (ctx) => {
 
   lines.push('');
   lines.push(`AI overview: ${(await getAiEnabled(chatId)) ? 'ON' : 'OFF'}`);
+  const resume = await getResumeState(chatId);
+  lines.push(resumeStateText(resume?.resumeText ?? null, resume?.resumeUpdatedAt ?? null));
   lines.push('');
-  lines.push('Commands: /keywordadd · /keywordremove · /keywordsub · /job · /ai · /unsub · /help');
+  lines.push(
+    'Commands: /keywordadd · /keywordremove · /keywordsub · /job · /ai · /resume · /unsub · /help',
+  );
   await ctx.reply(lines.join('\n'));
 });
 
@@ -418,6 +584,91 @@ bot.command('unsub', async (ctx) => {
   if (!chatId) return;
   await db.delete(userSubscriptions).where(eq(userSubscriptions.chatId, chatId));
   await ctx.reply('All your keywords were removed.');
+});
+
+/** Runs before the HELP fallback and stops the chain when it handles the paste. */
+bot.on('message', async (ctx, next) => {
+  const chatId = ctx.chat?.id;
+  if (!chatId || !isResumePending(chatId)) return next();
+  if (!ctx.message.text) {
+    await ctx.reply('Send resume as text only.');
+    return;
+  }
+  if (KNOWN_COMMAND.test(ctx.message.text)) return next();
+
+  const checked = validateResume(ctx.message.text);
+  if (!checked.ok) {
+    await ctx.reply(
+      `Resume must be ${RESUME_MIN}-${RESUME_MAX} characters. Yours is ${checked.length.toLocaleString('en-US')}. ` +
+        'Paste a different version, or send /help to cancel.',
+    );
+    return;
+  }
+
+  const hash = resumeHash(checked.text);
+  const state = await getResumeState(chatId);
+  if (state && state.resumeHash === hash) {
+    pendingResume.delete(chatId);
+    const note = state.aiOverview
+      ? ''
+      : !isFitEnabled()
+        ? '\n\nAI is off. Fit checks are disabled by the operator.'
+        : '\n\nAI is off. Run /ai on to resume fit checks.';
+    await ctx.reply(`Resume unchanged. Saved fit results kept.${note}`);
+    return;
+  }
+
+  const wasAi = state?.aiOverview ?? false;
+  // Saving a resume is the opt-in, even before a key is configured. The AI
+  // worker no-ops until AI is available.
+  const aiOn = true;
+  try {
+    await db.transaction(async (tx) => {
+      await tx
+        .insert(userSettings)
+        .values({
+          chatId,
+          aiOverview: aiOn,
+          resumeText: checked.text,
+          resumeHash: hash,
+          resumeUpdatedAt: new Date(),
+          updatedAt: new Date(),
+        })
+        .onConflictDoUpdate({
+          target: userSettings.chatId,
+          set: {
+            aiOverview: aiOn,
+            resumeText: checked.text,
+            resumeHash: hash,
+            resumeUpdatedAt: new Date(),
+            updatedAt: new Date(),
+          },
+        });
+      await tx.delete(jobFits).where(eq(jobFits.chatId, chatId));
+    });
+  } catch (err) {
+    // The resume is a query parameter: log a code or name only.
+    console.error(
+      '[resume] save failed:',
+      (err as { code?: string }).code ?? (err as Error).name ?? 'unknown',
+    );
+    await ctx.reply('Could not save your resume. Try again.');
+    return;
+  }
+
+  pendingResume.delete(chatId);
+  clearFitsForChat(chatId);
+  forgetFitWait(chatId);
+
+  let reply =
+    `Saved: ${checked.text.length.toLocaleString('en-US')}/${RESUME_MAX.toLocaleString('en-US')} chars.\n\n` +
+    RESUME_PRIVACY_NOTE;
+  if (!wasAi) {
+    reply += `\n\n${aiOnNotice()}`;
+  } else if (!isOverviewAvailable()) {
+    reply += '\n\nAI is not configured, so fit checks are unavailable until it is.';
+  }
+  await ctx.reply(reply);
 });
 
 bot.on('message', (ctx) => {
