@@ -677,5 +677,20 @@ bot.on('message', (ctx) => {
 });
 
 export function startBot(): void {
-  bot.start();
+  const run = async (): Promise<void> => {
+    for (;;) {
+      try {
+        await bot.start({
+          onStart: (info) => console.log(`[bot] polling as @${info.username}`),
+        });
+        return;
+      } catch (err) {
+        const code = (err as { error_code?: number }).error_code;
+        const name = (err as { name?: string }).name ?? 'error';
+        console.error(`[bot] polling failed (${code ?? name}); retrying in 5s`);
+        await new Promise((resolve) => setTimeout(resolve, 5000));
+      }
+    }
+  };
+  void run();
 }
