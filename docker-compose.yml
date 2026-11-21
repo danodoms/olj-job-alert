@@ -9,6 +9,8 @@ services:
       SYNC_BATCH: 5
       NOTIFIER_INTERVAL_MS: 20000
       STATUS_PORT: 7331
+      # Node 20 autoselect hangs on IPv6 when the container has no IPv6 route.
+      NODE_OPTIONS: --no-network-family-autoselection
     env_file:
       - .env
     ports:

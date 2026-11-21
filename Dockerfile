@@ -10,5 +10,7 @@ WORKDIR /app
 RUN apk add --no-cache fontconfig ttf-dejavu
 COPY package*.json ./
 RUN npm ci --omit=dev
+# Node 20 autoselect hangs on IPv6 when the container has no IPv6 route.
+ENV NODE_OPTIONS=--no-network-family-autoselection
 COPY --from=build /app/dist ./dist
 CMD ["node", "dist/index.js"]
