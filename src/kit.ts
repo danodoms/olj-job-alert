@@ -22,7 +22,8 @@ import { extractResumeLinks, redactEmails, redactPhones } from './signals';
 import { delay, defangUrls, escapeHtml, visibleLength } from './utils';
 
 export const KIT_VERSION = 1;
-const KIT_MAX_TOKENS = 1800;
+/** Ceiling, not spend. A demanding listing needs room for the message, 5 questions, and fields. */
+const KIT_MAX_TOKENS = 3000;
 const KIT_CONCURRENCY = 2;
 const KIT_RENDER_CAP = 3800;
 const DESCRIPTION_HEAD = 6000;
