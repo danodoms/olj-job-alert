@@ -211,6 +211,33 @@ KIT_DAILY_LIMIT=20
 
 ---
 
+## Repost watch
+
+When an employer posts the same role again, the alert and `/job` show the
+history: how many similar posts appeared in the last 90 days, the earlier job
+ids, and the pay or scope change. Detection is deterministic (title plus
+description similarity) and stored on the job row, shared by every chat. Only
+the newer post carries the history.
+
+One model call explains the change, and only when a similar post is found and
+the description is not an exact duplicate. Every change quote is checked against
+the text actually sent; unverified changes are dropped. Pay comparisons come
+from normalized `payUsdHour` / `payUsdMonth`, never from the model. Alerts never
+wait for this work.
+
+```env
+REPOST_WATCH_ENABLED=true
+REPOST_RENDER=true
+REPOST_SIMILARITY=0.65
+```
+
+`REPOST_WATCH_ENABLED` is the kill switch: off (the default) means no detection
+and no rendered line. `REPOST_RENDER=false` keeps detection and storage running
+while hiding the alert line and `/job` section, for a dry run. Raise
+`REPOST_SIMILARITY` if two different roles from the same employer match.
+
+---
+
 ## Notes
 
 - **Rate limiting:** Current settings scrape 5 jobs every 2 minutes with 0.05s delays between requests

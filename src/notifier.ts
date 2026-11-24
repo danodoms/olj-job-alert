@@ -8,6 +8,7 @@ import { delay } from './utils';
 import { payInsightFor } from './signals';
 import { buildAlertCaption, alertKeyboard } from './alert';
 import { isKitEnabled } from './kit';
+import { repostRenderEnabled } from './reposts';
 import { sendAlert, sendNotice } from './banner';
 import {
   AI_VERSION,
@@ -102,6 +103,30 @@ async function freshResumeStates(chatIds: number[]): Promise<Map<number, ResumeS
     out.set(row.chatId, { hash: row.resumeHash, aiOverview: row.aiOverview });
   }
   return out;
+}
+
+/**
+ * Repost detection lands after the tick snapshot. Re-read its columns before
+ * rendering so a same-tick alert does not lose the line.
+ */
+async function freshRepostFields(
+  job: typeof jobPostings.$inferSelect,
+): Promise<typeof jobPostings.$inferSelect> {
+  const rows = await db
+    .select({
+      repostOfJobId: jobPostings.repostOfJobId,
+      repostIds: jobPostings.repostIds,
+      repostScore: jobPostings.repostScore,
+      repostCount: jobPostings.repostCount,
+      repostFirstSeen: jobPostings.repostFirstSeen,
+      repostDiff: jobPostings.repostDiff,
+      repostVersion: jobPostings.repostVersion,
+      repostCheckedAt: jobPostings.repostCheckedAt,
+    })
+    .from(jobPostings)
+    .where(eq(jobPostings.id, job.id))
+    .limit(1);
+  return rows[0] ? { ...job, ...rows[0] } : job;
 }
 
 function resumeUnchanged(
@@ -283,6 +308,7 @@ export async function runNotifier(): Promise<void> {
       }
     } else {
       const insight = await payInsightFor(job);
+      const renderJob = repostRenderEnabled() ? await freshRepostFields(job) : job;
       const sharedAnalysis = (job.aiAnalysis as JobAnalysis | null) ?? null;
 
       for (const { chatId, matches } of sendRecipients) {
@@ -298,7 +324,7 @@ export async function runNotifier(): Promise<void> {
         const showAi = aiChats.has(chatId) && Boolean(analysis);
         const hasKit = isKitEnabled() && aiChats.has(chatId);
         const { caption, hasAi } = buildAlertCaption(
-          job,
+          renderJob,
           insight,
           matches,
           showAi ? analysis : null,

@@ -42,6 +42,7 @@ import {
   type KitFailure,
   type KitOutcome,
 } from './kit';
+import { repostDetailLines } from './reposts';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required');
@@ -356,10 +357,17 @@ async function buildJobDetail(chatId: number, jobId: number): Promise<DetailResu
     tailLines.push(`Posts: ${employer.postCount ?? 'Unknown'} (${employer.newPostCount ?? 0} new)`);
   }
 
-  tailLines.push('', '<i>AI estimate. Verify before sharing documents.</i>');
+  let historyLines = repostDetailLines(job);
 
   const buildMain = () =>
-    [...lines, ...(fitLines.length > 0 ? ['', ...fitLines] : []), ...tailLines].join('\n');
+    [
+      ...lines,
+      ...(fitLines.length > 0 ? ['', ...fitLines] : []),
+      ...tailLines,
+      ...(historyLines.length > 0 ? ['', ...historyLines] : []),
+      '',
+      '<i>AI estimate. Verify before sharing documents.</i>',
+    ].join('\n');
   let main = buildMain();
 
   const signals = analysis.signals;
@@ -379,6 +387,7 @@ async function buildJobDetail(chatId: number, jobId: number): Promise<DetailResu
     .join('\n\n');
   while (visibleLength(`${main}\n\n${evidence}`) > JOB_DETAIL_CAP) {
     if (fitLines.length > 2) fitLines.pop();
+    else if (historyLines.length > 0) historyLines = [];
     else if (gapLines.length > 0) gapLines = gapLines.slice(0, -1);
     else if (riskLines.length > 0) riskLines = riskLines.slice(0, -1);
     else break;

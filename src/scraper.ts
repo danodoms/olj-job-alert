@@ -6,6 +6,7 @@ import { delay, isAllowedLogoUrl } from './utils';
 import { parsePay } from './pay';
 import { hashDescription } from './signals';
 import { enqueueAnalysis } from './overview';
+import { enqueueRepostCheck } from './reposts';
 
 const SYNC_INTERVAL_MS = Number(process.env.SYNC_INTERVAL_MS ?? 120000);
 const SYNC_BATCH = Number(process.env.SYNC_BATCH ?? 5);
@@ -210,15 +211,16 @@ function payColumns(compensation: string, hoursPerWeek: string) {
   };
 }
 
-async function insertJob(job: ScrapedJob): Promise<boolean> {
+async function insertJob(job: ScrapedJob): Promise<number | null> {
   const result = await db
     .insert(jobPostings)
     .values(job)
     .onConflictDoNothing({ target: jobPostings.jobId })
     .returning({ id: jobPostings.id });
-  if (result.length === 0) return false;
+  if (result.length === 0) return null;
   enqueueAnalysis(result[0].id);
-  return true;
+  enqueueRepostCheck(result[0].id);
+  return result[0].id;
 }
 
 async function getMaxStoredJobId(): Promise<number> {

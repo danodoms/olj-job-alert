@@ -30,6 +30,19 @@ ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS employer text;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS employer_id bigint;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS employer_logo text;
 ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS description_hash text;
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS repost_of_job_id bigint;
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS repost_ids jsonb;
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS repost_score real;
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS repost_count integer;
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS repost_first_seen timestamptz;
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS repost_diff jsonb;
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS repost_version integer;
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS repost_checked_at timestamptz;
+ALTER TABLE job_postings ADD COLUMN IF NOT EXISTS repost_attempts integer DEFAULT 0;
+CREATE INDEX IF NOT EXISTS idx_job_postings_repost_of
+  ON job_postings (repost_of_job_id);
+CREATE INDEX IF NOT EXISTS idx_job_postings_employer_created
+  ON job_postings (employer_id, created_at);
 CREATE TABLE IF NOT EXISTS employer_banners (
   employer_id bigint PRIMARY KEY,
   file_id text NOT NULL,

@@ -15,6 +15,7 @@ import {
 import type { PayInsight } from './signals';
 import { jobPostings } from './schema';
 import type { KeywordMatch } from './match';
+import { REPOST_VERSION, repostAlertLine } from './reposts';
 import { defangUrls, escapeHtml, makeExcerpt, visibleLength } from './utils';
 
 const AI_BLOCK_CAP = 700;
@@ -146,6 +147,8 @@ export function buildAlertCaption(
       `📊 <b>Market:</b> ${emoji} ${escapeHtml(verdict)} · vs ${escapeHtml(insight.peerLabel)}`,
     );
   }
+  const repost = repostAlertLine(job);
+  if (repost) tail.push(repost);
 
   const block = analysis ? aiBlock(analysis.final, analysis.fit ?? null) : null;
   if (block) tail.push('', block);
@@ -322,6 +325,33 @@ if (require.main === module) {
   check('long fit keeps the score line', longFitPart.startsWith('🎯 Resume fit: 6/10 Partial'));
   check('long fit caption under limit', visibleLength(longFit.caption) <= CAPTION_LIMIT);
   check('no fit block without fit', !withAi.caption.includes('Resume fit'));
+
+  // Repost line: after Market, inside the caption budget, hidden when stale.
+  process.env.REPOST_WATCH_ENABLED = 'true';
+  delete process.env.REPOST_RENDER;
+  const repostJob = {
+    ...job,
+    repostVersion: REPOST_VERSION,
+    repostCount: 2,
+    repostFirstSeen: new Date('2026-06-03T10:00:00Z'),
+    repostDiff: { changes: [], confidence: null, pay: '$5 → $4/hr' },
+    repostIds: [1, 2],
+  } as unknown as typeof jobPostings.$inferSelect;
+  const withRepost = buildAlertCaption(repostJob, insight, matches, null);
+  check('repost line renders', withRepost.caption.includes('2 similar posts since Jun 3'));
+  check('repost line keeps the caption under limit', visibleLength(withRepost.caption) <= CAPTION_LIMIT);
+  check(
+    'repost line sits after market',
+    withRepost.caption.indexOf('📊') < withRepost.caption.indexOf('♻️'),
+  );
+  const stalePolicy = buildAlertCaption(
+    { ...repostJob, repostVersion: REPOST_VERSION + 1 } as typeof jobPostings.$inferSelect,
+    insight,
+    matches,
+    null,
+  );
+  check('stale repost line hidden', !stalePolicy.caption.includes('♻️'));
+  process.env.REPOST_WATCH_ENABLED = 'false';
 
   if (failed === 0) console.log('alert.ts self-check OK');
   else process.exit(1);

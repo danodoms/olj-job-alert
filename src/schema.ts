@@ -49,12 +49,28 @@ export const jobPostings = pgTable(
     aiUsage: jsonb('ai_usage'),
     aiEscalated: boolean('ai_escalated').default(false),
     aiAttempts: integer('ai_attempts').default(0),
+
+    // Repost watch (see src/reposts.ts).
+    repostOfJobId: bigint('repost_of_job_id', { mode: 'number' }),
+    repostIds: jsonb('repost_ids').$type<number[]>(),
+    repostScore: real('repost_score'),
+    repostCount: integer('repost_count'),
+    repostFirstSeen: timestamp('repost_first_seen', { withTimezone: true }),
+    repostDiff: jsonb('repost_diff'),
+    repostVersion: integer('repost_version'),
+    repostCheckedAt: timestamp('repost_checked_at', { withTimezone: true }),
+    repostAttempts: integer('repost_attempts').default(0),
   },
   (table) => ({
     payUsdMonthIdx: index('idx_job_postings_pay_usd_month').on(table.payUsdMonth),
     processedIdx: index('idx_job_postings_is_processed').on(table.isProcessed),
     hashIdx: index('idx_job_postings_description_hash').on(table.descriptionHash),
     employerIdx: index('idx_job_postings_employer_id').on(table.employerId),
+    repostOfIdx: index('idx_job_postings_repost_of').on(table.repostOfJobId),
+    employerCreatedIdx: index('idx_job_postings_employer_created').on(
+      table.employerId,
+      table.createdAt,
+    ),
   }),
 );
 

@@ -11,6 +11,7 @@
     "check:pay": "tsx src/pay.ts",
     "check:overview": "tsx src/overview.ts",
     "check:signals": "tsx src/signals.ts",
+    "check:repost": "tsx src/reposts.ts",
     "check:employer": "tsx src/employer-check.ts",
     "check:utils": "tsx src/utils.ts",
     "check:match": "tsx src/match.ts",
@@ -20,7 +21,7 @@
     "check:resume": "tsx src/resume.ts",
     "check:kit": "tsx src/kit.ts",
     "preview:banner": "tsx src/scripts/preview-banner.ts",
-    "test": "npm run check:pay && npm run check:signals && npm run check:employer && npm run check:overview && npm run check:utils && npm run check:match && npm run check:alert && npm run check:banner && npm run check:notifier && npm run check:resume && npm run check:kit",
+    "test": "npm run check:pay && npm run check:signals && npm run check:repost && npm run check:employer && npm run check:overview && npm run check:utils && npm run check:match && npm run check:alert && npm run check:banner && npm run check:notifier && npm run check:resume && npm run check:kit",
     "eval:overview": "tsx src/scripts/eval-overview.ts",
     "eval:real": "tsx src/scripts/eval-real.ts",
     "reanalyze:overview": "tsx src/scripts/reanalyze-overview.ts"
