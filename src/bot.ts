@@ -3,11 +3,11 @@ import { and, eq, inArray, sql } from 'drizzle-orm';
 import { db } from './db';
 import {
   jobFits,
+  jobKits,
   jobPostings,
   userSubscriptions,
   userSettings,
   notifications,
-  overviewFeedback,
 } from './schema';
 import {
   AI_VERSION,
@@ -33,6 +33,15 @@ import {
 import { defangUrls, escapeHtml, makeExcerpt, visibleLength } from './utils';
 import { formatPay } from './pay';
 import { alertKeyboard, hoursLabel, parsedPayOf } from './alert';
+import {
+  clearKitsForChat,
+  isKitBuilding,
+  isKitEnabled,
+  renderKit,
+  requestKit,
+  type KitFailure,
+  type KitOutcome,
+} from './kit';
 
 const token = process.env.TELEGRAM_BOT_TOKEN;
 if (!token) throw new Error('TELEGRAM_BOT_TOKEN is required');
@@ -51,6 +60,7 @@ const HELP = [
   '/keywordremove <k1, k2> — remove keywords',
   '/mysubs — show your keywords and activity',
   '/job <jobId> — full AI analysis for an alerted job',
+  '/kit <jobId> — application kit for an alerted job',
   '/ai on|off — enable or disable the AI overview and resume fit',
   '/resume — add, view, or clear your resume (max 4,000 chars)',
   '/unsub — remove all keywords',
@@ -59,7 +69,7 @@ const HELP = [
 
 /** Keep in sync with bot.command: lets a resume paste start with an unknown slash word. */
 const KNOWN_COMMAND =
-  /^\/(?:start|help|ai|resume|job|keywordsub|keywordadd|keywordremove|mysubs|unsub)(?:@\w+)?(?:\s|$)/i;
+  /^\/(?:start|help|ai|resume|job|kit|keywordsub|keywordadd|keywordremove|mysubs|unsub)(?:@\w+)?(?:\s|$)/i;
 
 /** A pending resume paste, in memory only. Restart loses it. */
 const pendingResume = new Map<number, number>();
@@ -220,6 +230,7 @@ bot.command('resume', async (ctx) => {
           .set({ resumeText: null, resumeHash: null, resumeUpdatedAt: null, updatedAt: new Date() })
           .where(eq(userSettings.chatId, chatId));
         await tx.delete(jobFits).where(eq(jobFits.chatId, chatId));
+        await tx.delete(jobKits).where(eq(jobKits.chatId, chatId));
       });
     } catch (err) {
       console.error(
@@ -231,8 +242,9 @@ bot.command('resume', async (ctx) => {
     }
     pendingResume.delete(chatId);
     clearFitsForChat(chatId);
+    clearKitsForChat(chatId);
     forgetFitWait(chatId);
-    await ctx.reply('Resume and saved fit results removed. AI setting unchanged.');
+    await ctx.reply('Resume, saved fits, and kits removed. AI setting unchanged.');
     return;
   }
 
@@ -383,6 +395,8 @@ async function sendJobDetail(
   ctx: Context,
   chatId: number,
   jobId: number,
+  hasAi: boolean,
+  hasKit: boolean,
 ): Promise<'sent' | DetailFailure> {
   const detail = await buildJobDetail(chatId, jobId);
   if (!detail.ok) return detail.reason;
@@ -393,9 +407,9 @@ async function sendJobDetail(
   };
   const combined = detail.evidence ? `${detail.main}\n\n${detail.evidence}` : detail.main;
   if (visibleLength(combined) <= MESSAGE_LIMIT) {
-    await ctx.reply(combined, { ...options, reply_markup: alertKeyboard(jobId, false) });
+    await ctx.reply(combined, { ...options, reply_markup: alertKeyboard(jobId, hasAi, hasKit) });
   } else {
-    await ctx.reply(detail.main, { ...options, reply_markup: alertKeyboard(jobId, false) });
+    await ctx.reply(detail.main, { ...options, reply_markup: alertKeyboard(jobId, hasAi, hasKit) });
     if (detail.evidence) await ctx.reply(detail.evidence, options);
   }
   return 'sent';
@@ -407,6 +421,58 @@ function detailFailureText(reason: DetailFailure): string {
   return 'No AI analysis is available for this job yet.';
 }
 
+const KIT_PLACEHOLDER = '✍️ Building your application kit. This takes up to 45 seconds.';
+
+function kitFailureText(reason: KitFailure): string {
+  if (reason === 'no_alert') return 'I have no alert for that job in this chat.';
+  if (reason === 'ai_off') return 'Application kit needs AI on. Send /ai on.';
+  if (reason === 'no_resume') {
+    return 'Save your resume first with /resume. The kit uses it to avoid generic text.';
+  }
+  if (reason === 'cap') return 'Daily kit limit reached. Saved kits still open.';
+  if (reason === 'unavailable') return 'Application kit is not available right now.';
+  return 'Could not build the kit. Try again in a minute.';
+}
+
+/** Edits the placeholder into the kit, and sends a new message if the edit fails. */
+async function sendKit(
+  ctx: Context,
+  chatId: number,
+  jobId: number,
+  placeholderId?: number,
+): Promise<void> {
+  let outcome: KitOutcome;
+  try {
+    outcome = await requestKit(chatId, jobId);
+  } catch (err) {
+    console.error('[kit] request failed:', (err as { code?: string }).code ?? (err as Error).name);
+    outcome = { ok: false as const, reason: 'failed' as const };
+  }
+  const options = { parse_mode: 'HTML' as const, link_preview_options: { is_disabled: true } };
+
+  if (!outcome.ok) {
+    const text = kitFailureText(outcome.reason);
+    if (placeholderId) {
+      const edited = await ctx.api.editMessageText(chatId, placeholderId, text).catch(() => null);
+      if (edited) return;
+    }
+    await ctx.reply(text);
+    return;
+  }
+
+  const { parts, keyboard } = renderKit(outcome.kit, outcome.jobTitle, jobId);
+  for (let i = 0; i < parts.length; i++) {
+    const reply_markup = i === parts.length - 1 ? keyboard : undefined;
+    if (i === 0 && placeholderId) {
+      const edited = await ctx.api
+        .editMessageText(chatId, placeholderId, parts[0], { ...options, reply_markup })
+        .catch(() => null);
+      if (edited) continue;
+    }
+    await ctx.reply(parts[i], { ...options, reply_markup });
+  }
+}
+
 bot.command('job', async (ctx) => {
   const chatId = ctx.chat?.id;
   if (!chatId) return;
@@ -415,7 +481,8 @@ bot.command('job', async (ctx) => {
     await ctx.reply('Usage: /job <jobId>');
     return;
   }
-  const result = await sendJobDetail(ctx, chatId, jobId);
+  const aiOn = await getAiEnabled(chatId);
+  const result = await sendJobDetail(ctx, chatId, jobId, aiOn, aiOn && isKitEnabled());
   if (result !== 'sent') await ctx.reply(detailFailureText(result));
 });
 
@@ -426,42 +493,49 @@ bot.callbackQuery(/^job:(\d+)$/, async (ctx) => {
     await ctx.answerCallbackQuery({ text: 'Not available.' });
     return;
   }
-  const result = await sendJobDetail(ctx, chatId, jobId);
+  const aiOn = await getAiEnabled(chatId);
+  const result = await sendJobDetail(ctx, chatId, jobId, aiOn, aiOn && isKitEnabled());
   await ctx.answerCallbackQuery(result === 'sent' ? undefined : { text: 'Not available.' });
 });
 
-bot.callbackQuery(/^fb:(helpful|unhelpful|report):(\d+)$/, async (ctx) => {
+bot.command('kit', async (ctx) => {
   const chatId = ctx.chat?.id;
-  const value = ctx.match[1];
-  const jobId = Number(ctx.match[2]);
+  if (!chatId) return;
+  const jobId = Number((ctx.match ?? '').trim());
+  if (!Number.isSafeInteger(jobId) || jobId <= 0) {
+    await ctx.reply('Usage: /kit <jobId>');
+    return;
+  }
+  if (!isPrivateChat(ctx.chat?.type)) {
+    await ctx.reply('DM the bot to use /kit.');
+    return;
+  }
+  if (isKitBuilding(chatId, jobId)) {
+    await ctx.reply('Still building…');
+    return;
+  }
+  const placeholder = await ctx.reply(KIT_PLACEHOLDER);
+  await sendKit(ctx, chatId, jobId, placeholder.message_id);
+});
+
+bot.callbackQuery(/^kit:(\d+)(?::(?:apply|msg|prep))?$/, async (ctx) => {
+  const chatId = ctx.chat?.id;
+  const jobId = Number(ctx.match[1]);
   if (!chatId || !Number.isFinite(jobId)) {
     await ctx.answerCallbackQuery({ text: 'Not available.' });
     return;
   }
-
-  const [alerted] = await db
-    .select({ id: notifications.id })
-    .from(notifications)
-    .where(and(eq(notifications.chatId, chatId), eq(notifications.jobId, jobId)))
-    .limit(1);
-  if (!alerted) {
-    await ctx.answerCallbackQuery({ text: 'Not available.' });
+  if (!isPrivateChat(ctx.chat?.type)) {
+    await ctx.answerCallbackQuery({ text: 'DM the bot to use /kit.' });
     return;
   }
-
-  let saved = true;
-  await db
-    .insert(overviewFeedback)
-    .values({ chatId, jobId, value })
-    .onConflictDoUpdate({
-      target: [overviewFeedback.chatId, overviewFeedback.jobId],
-      set: { value, createdAt: new Date() },
-    })
-    .catch((err) => {
-      saved = false;
-      console.error('[bot] feedback save failed:', err);
-    });
-  await ctx.answerCallbackQuery({ text: saved ? 'Thanks — feedback saved.' : 'Could not save feedback.' });
+  if (isKitBuilding(chatId, jobId)) {
+    await ctx.answerCallbackQuery({ text: 'Still building…' });
+    return;
+  }
+  await ctx.answerCallbackQuery({ text: 'Building your kit…' });
+  const placeholder = await ctx.reply(KIT_PLACEHOLDER);
+  await sendKit(ctx, chatId, jobId, placeholder.message_id);
 });
 
 bot.command('keywordsub', async (ctx) => {
@@ -574,7 +648,7 @@ bot.command('mysubs', async (ctx) => {
   lines.push(resumeStateText(resume?.resumeText ?? null, resume?.resumeUpdatedAt ?? null));
   lines.push('');
   lines.push(
-    'Commands: /keywordadd · /keywordremove · /keywordsub · /job · /ai · /resume · /unsub · /help',
+    'Commands: /keywordadd · /keywordremove · /keywordsub · /job · /kit · /ai · /resume · /unsub · /help',
   );
   await ctx.reply(lines.join('\n'));
 });
@@ -645,6 +719,7 @@ bot.on('message', async (ctx, next) => {
           },
         });
       await tx.delete(jobFits).where(eq(jobFits.chatId, chatId));
+      await tx.delete(jobKits).where(eq(jobKits.chatId, chatId));
     });
   } catch (err) {
     // The resume is a query parameter: log a code or name only.
@@ -658,6 +733,7 @@ bot.on('message', async (ctx, next) => {
 
   pendingResume.delete(chatId);
   clearFitsForChat(chatId);
+  clearKitsForChat(chatId);
   forgetFitWait(chatId);
 
   let reply =

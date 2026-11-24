@@ -25,8 +25,8 @@ import {
   type SoftSignal,
 } from './signals';
 
-const AI_MODEL = process.env.AI_MODEL ?? 'deepseek-v4.1-flash';
-const AI_ESCALATION_MODEL = process.env.AI_ESCALATION_MODEL ?? 'deepseek-v4-pro';
+export const AI_MODEL = process.env.AI_MODEL ?? 'deepseek-v4.1-flash';
+export const AI_ESCALATION_MODEL = process.env.AI_ESCALATION_MODEL ?? 'deepseek-v4-pro';
 const AI_BASE_URL = (process.env.AI_BASE_URL ?? 'https://opencode.ai/zen/go/v1').replace(/\/+$/, '');
 // Analysis runs off the alert path, so allow for real model latency.
 const timeoutEnv = Number(process.env.AI_TIMEOUT_MS ?? 45000);
@@ -51,7 +51,7 @@ export function isFitEnabled(): boolean {
 }
 
 /** Network errors, 429, and 5xx are worth retrying; timeouts and bad JSON are not. */
-class TransientAiError extends Error {}
+export class TransientAiError extends Error {}
 
 const SIGNAL_LINE =
   /fee|deposit|pay|salary|rate|trial|unpaid|training|interview|apply|contact|email|whatsapp|telegram|skype|bank|passport|crypto|usdt|commission|hours|contract/i;
@@ -585,9 +585,9 @@ function buildMainUser(
   });
 }
 
-type CallResult = { content: string; usage: CallUsage };
+export type CallResult = { content: string; usage: CallUsage };
 
-async function callModel(
+export async function callModel(
   model: string,
   system: string,
   user: string,

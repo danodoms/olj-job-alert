@@ -57,6 +57,21 @@ CREATE TABLE IF NOT EXISTS job_fits (
   UNIQUE (chat_id, job_id)
 );
 CREATE INDEX IF NOT EXISTS idx_job_fits_job_id ON job_fits(job_id);
+CREATE TABLE IF NOT EXISTS job_kits (
+  id serial PRIMARY KEY,
+  chat_id bigint NOT NULL,
+  job_id bigint NOT NULL,
+  resume_hash text NOT NULL,
+  job_hash text NOT NULL,
+  kit_version int NOT NULL,
+  kit jsonb NOT NULL,
+  usage jsonb,
+  created_at timestamptz DEFAULT now(),
+  updated_at timestamptz DEFAULT now(),
+  UNIQUE (chat_id, job_id)
+);
+CREATE INDEX IF NOT EXISTS idx_job_kits_job_id ON job_kits(job_id);
+CREATE INDEX IF NOT EXISTS idx_job_kits_chat_updated ON job_kits(chat_id, updated_at);
 CREATE TABLE IF NOT EXISTS employer_checks (
   employer_id bigint PRIMARY KEY,
   name text,

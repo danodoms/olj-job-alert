@@ -181,6 +181,19 @@ function extractLinks(text: string): string[] {
   return [...new Set(matches.map((l) => l.replace(/[.,;:]+$/, '')))].slice(0, 10);
 }
 
+/** Resume links: no cap, and `www.` counts. Used to mark kit requirements as have. */
+export function extractResumeLinks(text: string): string[] {
+  const matches = text.match(/https?:\/\/[^\s<>()]+|\bwww\.[^\s<>()]+/gi) ?? [];
+  return [
+    ...new Set(
+      matches.map((link) => {
+        const trimmed = link.replace(/[.,;:]+$/, '');
+        return /^www\./i.test(trimmed) ? `https://${trimmed}` : trimmed;
+      }),
+    ),
+  ];
+}
+
 function domainMismatch(email: string | null, employer: string): boolean {
   if (!email) return false;
   const domain = email.split('@')[1]?.toLowerCase() ?? '';

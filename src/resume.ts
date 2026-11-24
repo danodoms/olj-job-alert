@@ -10,7 +10,7 @@ export const RESUME_MAX = 4000;
 const fmt = (n: number) => n.toLocaleString('en-US');
 
 export const RESUME_PRIVACY_NOTE =
-  'Resume saved. It is stored in the database until you run /resume clear, and it is sent to the AI model only for fit checks. Emails and phone numbers are removed before the model call. Your pasted message stays in this chat, so delete it if you want.';
+  'Resume saved. It is stored in the database until you run /resume clear, and it is sent to the AI model only for fit checks and application kits. Emails and phone numbers are removed before the model call. Your pasted message stays in this chat, so delete it if you want.';
 
 /** Normalize line endings and trim; the paste is stored as sent otherwise. */
 export function trimResume(raw: string): string {

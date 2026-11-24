@@ -7,6 +7,7 @@ import { matchJob, type KeywordMatch } from './match';
 import { delay } from './utils';
 import { payInsightFor } from './signals';
 import { buildAlertCaption, alertKeyboard } from './alert';
+import { isKitEnabled } from './kit';
 import { sendAlert, sendNotice } from './banner';
 import {
   AI_VERSION,
@@ -295,6 +296,7 @@ export async function runNotifier(): Promise<void> {
             (job.aiVersion === AI_VERSION ? sharedAnalysis : null);
         }
         const showAi = aiChats.has(chatId) && Boolean(analysis);
+        const hasKit = isKitEnabled() && aiChats.has(chatId);
         const { caption, hasAi } = buildAlertCaption(
           job,
           insight,
@@ -303,7 +305,7 @@ export async function runNotifier(): Promise<void> {
         );
 
         try {
-          const result = await sendAlert(chatId, caption, job, alertKeyboard(job.jobId, hasAi));
+          const result = await sendAlert(chatId, caption, job, alertKeyboard(job.jobId, hasAi, hasKit));
           if (result.ok) {
             await db
               .insert(notifications)

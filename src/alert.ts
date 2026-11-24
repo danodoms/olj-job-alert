@@ -78,7 +78,7 @@ function aiBlock(final: FinalAnalysis, fit: FitAnalysis | null): string | null {
   return fit ? `${overview}\n${fitBlock(fit)}` : overview;
 }
 
-export function alertKeyboard(jobId: number, hasAi: boolean): InlineKeyboardMarkup {
+export function alertKeyboard(jobId: number, hasAi: boolean, hasKit = false): InlineKeyboardMarkup {
   const keyboard: InlineKeyboardMarkup = {
     inline_keyboard: [
       [
@@ -89,14 +89,10 @@ export function alertKeyboard(jobId: number, hasAi: boolean): InlineKeyboardMark
       ],
     ],
   };
-  if (hasAi) {
-    keyboard.inline_keyboard.push([
-      { text: '🔍 Full check', callback_data: `job:${jobId}` },
-      { text: '👍 Helpful', callback_data: `fb:helpful:${jobId}` },
-      { text: '👎', callback_data: `fb:unhelpful:${jobId}` },
-      { text: '🚩', callback_data: `fb:report:${jobId}` },
-    ]);
-  }
+  const actions: InlineKeyboardMarkup['inline_keyboard'][number] = [];
+  if (hasAi) actions.push({ text: '🔍 Full check', callback_data: `job:${jobId}` });
+  if (hasKit) actions.push({ text: '✍️ Kit', callback_data: `kit:${jobId}` });
+  if (actions.length > 0) keyboard.inline_keyboard.push(actions);
   return keyboard;
 }
 
@@ -265,16 +261,17 @@ if (require.main === module) {
   );
   check('ai urls defanged', !withUrl.caption.includes('https://evil'));
 
-  const aiKeyboard = alertKeyboard(123456, true);
+  const aiKeyboard = alertKeyboard(123456, true, true);
   check('apply button row first', aiKeyboard.inline_keyboard[0][0].text === '✅ Apply on OLJ');
   check(
     'callbacks exact',
     JSON.stringify(
       aiKeyboard.inline_keyboard[1].map((b) => ('callback_data' in b ? b.callback_data : null)),
-    ) ===
-      JSON.stringify(['job:123456', 'fb:helpful:123456', 'fb:unhelpful:123456', 'fb:report:123456']),
+    ) === JSON.stringify(['job:123456', 'kit:123456']),
   );
+  check('no feedback buttons', !JSON.stringify(aiKeyboard).includes('fb:'));
   check('no ai buttons without ai', alertKeyboard(123456, false).inline_keyboard.length === 1);
+  check('kit hidden without kit', alertKeyboard(123456, true).inline_keyboard[1].length === 1);
 
   const fitAnalysis = {
     ...analysis,

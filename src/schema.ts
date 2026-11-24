@@ -103,6 +103,28 @@ export const jobFits = pgTable(
   }),
 );
 
+/** Cached application kit per chat and job. Personal: never shared across chats. */
+export const jobKits = pgTable(
+  'job_kits',
+  {
+    id: serial('id').primaryKey(),
+    chatId: bigint('chat_id', { mode: 'number' }).notNull(),
+    jobId: bigint('job_id', { mode: 'number' }).notNull(),
+    resumeHash: text('resume_hash').notNull(),
+    jobHash: text('job_hash').notNull(),
+    kitVersion: integer('kit_version').notNull(),
+    kit: jsonb('kit').notNull(),
+    usage: jsonb('usage'),
+    createdAt: timestamp('created_at', { withTimezone: true }).defaultNow(),
+    updatedAt: timestamp('updated_at', { withTimezone: true }).defaultNow(),
+  },
+  (table) => ({
+    uniq: uniqueIndex('job_kits_chat_id_job_id_unique').on(table.chatId, table.jobId),
+    jobIdx: index('idx_job_kits_job_id').on(table.jobId),
+    chatUpdatedIdx: index('idx_job_kits_chat_updated').on(table.chatId, table.updatedAt),
+  }),
+);
+
 /** Cached OLJ employer search result, reused for 7 days. */
 export const employerChecks = pgTable('employer_checks', {
   employerId: bigint('employer_id', { mode: 'number' }).primaryKey(),

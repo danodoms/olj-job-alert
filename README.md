@@ -122,8 +122,7 @@ worker, cached on the job row, and shared by every opted-in chat. Shared alerts
 wait at most 120 seconds for a shared overview, then send without it. Resume
 alerts wait only for their own fit, so one pending fit never holds other
 subscribers. `/job <id>` shows the full analysis
-for a job you were alerted about, and the alert buttons store
-helpful/unhelpful/report feedback.
+for a job you were alerted about.
 
 Add these to `.env`:
 
@@ -187,6 +186,28 @@ holds only the resume recipients for that job. Saved fits still show when AI is
 not configured; new fits need a model key.
 `RESUME_FIT_ENABLED=false` disables fit generation and display without deleting
 saved resumes.
+
+## Application kit (on demand)
+
+With AI on, an alert shows `✍️ Kit`. Tapping it (or `/kit <id>` in a private
+chat) builds a short application kit: the listing's own instructions, a subject
+line, required links or files marked have or missing, what to lead with, a
+90-120 word first-person message, likely questions, and claims to avoid. A saved
+resume is needed for the kit itself; without one the reply points at `/resume`.
+It is drafted, never sent to the employer.
+
+Only alerted jobs work, the chat must be private, and a kit is cached per chat
+and job. A resume save or clear deletes that chat's kits. Job text and the
+resume are redacted before the model call; the application email or form URL is
+removed from the model input entirely and rendered by code. Kits are limited to
+`KIT_DAILY_LIMIT` new generations per chat per 24 hours (default 20).
+`KIT_ENABLED=false` hides the button and stops new generations; cached kits
+still open.
+
+```env
+KIT_ENABLED=true
+KIT_DAILY_LIMIT=20
+```
 
 ---
 

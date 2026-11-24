@@ -18,8 +18,9 @@
     "check:banner": "tsx src/banner.ts",
     "check:notifier": "tsx src/notifier.ts",
     "check:resume": "tsx src/resume.ts",
+    "check:kit": "tsx src/kit.ts",
     "preview:banner": "tsx src/scripts/preview-banner.ts",
-    "test": "npm run check:pay && npm run check:signals && npm run check:employer && npm run check:overview && npm run check:utils && npm run check:match && npm run check:alert && npm run check:banner && npm run check:notifier && npm run check:resume",
+    "test": "npm run check:pay && npm run check:signals && npm run check:employer && npm run check:overview && npm run check:utils && npm run check:match && npm run check:alert && npm run check:banner && npm run check:notifier && npm run check:resume && npm run check:kit",
     "eval:overview": "tsx src/scripts/eval-overview.ts",
     "eval:real": "tsx src/scripts/eval-real.ts",
     "reanalyze:overview": "tsx src/scripts/reanalyze-overview.ts"

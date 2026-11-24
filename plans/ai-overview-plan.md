@@ -1,5 +1,9 @@
 # AI Overview — implementation plan
 
+Superseded for alert feedback buttons and the `fb:` callbacks by
+`application-kit-plan.md`. The overview itself, `/job`, and the AI switch still
+stand as implemented.
+
 Opt-in, per-chat AI analysis attached to matched job alerts. Default off. One
 analysis per job, cached and shared by every opted-in recipient.
 

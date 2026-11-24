@@ -1,5 +1,9 @@
 # Telegram rendering upgrade — implementation plan
 
+Superseded for alert feedback buttons and the `fb:` callbacks by
+`application-kit-plan.md`. The rendering rules, banner, and `/job` detail still
+stand as implemented.
+
 Companion to `ai-overview-plan.md`. Covers how alerts and `/job` are rendered.
 No AI tokens are spent here. The overview is generated once and cached; this
 layer only sends cached text, a generated banner, and buttons.
